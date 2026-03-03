@@ -1,881 +1,727 @@
-require("dotenv").config();
-
-const {
-  Client,
-  GatewayIntentBits,
-  Partials,
-  REST,
-  Routes,
+import 'dotenv/config';
+import {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
-  StringSelectMenuBuilder,
+  ChannelType,
+  Client,
+  EmbedBuilder,
+  Events,
+  GatewayIntentBits,
+  InteractionType,
   ModalBuilder,
+  PermissionFlagsBits,
+  REST,
+  Routes,
+  SelectMenuBuilder,
   TextInputBuilder,
   TextInputStyle,
-  EmbedBuilder,
-  ChannelType,
-  PermissionsBitField,
-} = require("discord.js");
+} from 'discord.js';
 
-const { Pool } = require("pg");
+import pg from 'pg';
+const { Pool } = pg;
 
-// =====================
-// ENV (Railway Variables)
-// =====================
+/**
+ * ========= ENV / REQUIRED VARS =========
+ */
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID = process.env.GUILD_ID;
 
-// Where the menu is posted / customers order (e.g. #order-here)
 const MENU_CHANNEL_ID = process.env.MENU_CHANNEL_ID;
-
-// Role that represents your staff (can see orders)
+const ORDERS_CHANNEL_ID = process.env.ORDERS_CHANNEL_ID;
+const ORDERS_CATEGORY_ID = process.env.ORDERS_CATEGORY_ID; // optional, but you have it
 const STAFF_ROLE_ID = process.env.STAFF_ROLE_ID;
 
-// Category where private order channels will be created
-const ORDERS_CATEGORY_ID = process.env.ORDERS_CATEGORY_ID;
+const DATABASE_URL = process.env.DATABASE_URL;
 
-// Optional DB (Railway Postgres): DATABASE_URL or PG* vars
-const DATABASE_URL = process.env.DATABASE_URL || process.env.DATABASE_PUBLIC_URL || process.env.DATABASE_PRIVATE_URL;
-
-// Hard fail if core env missing
-if (!DISCORD_TOKEN) throw new Error("Missing DISCORD_TOKEN");
-if (!CLIENT_ID) throw new Error("Missing CLIENT_ID");
-if (!GUILD_ID) throw new Error("Missing GUILD_ID");
-if (!MENU_CHANNEL_ID) throw new Error("Missing MENU_CHANNEL_ID");
-if (!STAFF_ROLE_ID) throw new Error("Missing STAFF_ROLE_ID");
-if (!ORDERS_CATEGORY_ID) throw new Error("Missing ORDERS_CATEGORY_ID");
-
-// =====================
-// Database (Postgres)
-// =====================
-const pool = DATABASE_URL
-  ? new Pool({ connectionString: DATABASE_URL, ssl: { rejectUnauthorized: false } })
-  : null;
-
-// If no DB, we will still work but shipping/cart resets on restart.
-const memory = {
-  shipping: new Map(), // userId -> profile
-  cart: new Map(),     // userId -> cart array
-};
-
-async function dbInit() {
-  if (!pool) return;
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS shipping_profiles (
-      user_id TEXT PRIMARY KEY,
-      full_name TEXT NOT NULL,
-      email TEXT NOT NULL,
-      line1 TEXT NOT NULL,
-      line2 TEXT,
-      city TEXT NOT NULL,
-      postcode TEXT NOT NULL,
-      country TEXT NOT NULL,
-      updated_at TIMESTAMP NOT NULL DEFAULT NOW()
-    );
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS carts (
-      user_id TEXT PRIMARY KEY,
-      cart_json JSONB NOT NULL,
-      updated_at TIMESTAMP NOT NULL DEFAULT NOW()
-    );
-  `);
+function requireEnv(name, val) {
+  if (!val) throw new Error(`Missing ${name}`);
 }
 
-async function getShippingProfile(userId) {
-  if (!pool) return memory.shipping.get(userId) || null;
-  const res = await pool.query(`SELECT * FROM shipping_profiles WHERE user_id=$1`, [userId]);
-  if (!res.rows.length) return null;
-  const r = res.rows[0];
-  return {
-    fullName: r.full_name,
-    email: r.email,
-    line1: r.line1,
-    line2: r.line2 || "",
-    city: r.city,
-    postcode: r.postcode,
-    country: r.country,
-  };
-}
+requireEnv('DISCORD_TOKEN', DISCORD_TOKEN);
+requireEnv('CLIENT_ID', CLIENT_ID);
+requireEnv('GUILD_ID', GUILD_ID);
+requireEnv('MENU_CHANNEL_ID', MENU_CHANNEL_ID);
+requireEnv('ORDERS_CHANNEL_ID', ORDERS_CHANNEL_ID);
+requireEnv('STAFF_ROLE_ID', STAFF_ROLE_ID);
+requireEnv('DATABASE_URL', DATABASE_URL);
 
-async function upsertShippingProfile(userId, profile) {
-  if (!pool) {
-    memory.shipping.set(userId, profile);
-    return;
-  }
-  await pool.query(
-    `
-    INSERT INTO shipping_profiles (user_id, full_name, email, line1, line2, city, postcode, country, updated_at)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())
-    ON CONFLICT (user_id) DO UPDATE SET
-      full_name=EXCLUDED.full_name,
-      email=EXCLUDED.email,
-      line1=EXCLUDED.line1,
-      line2=EXCLUDED.line2,
-      city=EXCLUDED.city,
-      postcode=EXCLUDED.postcode,
-      country=EXCLUDED.country,
-      updated_at=NOW()
-    `,
-    [
-      userId,
-      profile.fullName,
-      profile.email,
-      profile.line1,
-      profile.line2 || "",
-      profile.city,
-      profile.postcode,
-      profile.country,
-    ]
-  );
-}
-
-async function getCart(userId) {
-  if (!pool) return memory.cart.get(userId) || [];
-  const res = await pool.query(`SELECT cart_json FROM carts WHERE user_id=$1`, [userId]);
-  if (!res.rows.length) return [];
-  return res.rows[0].cart_json || [];
-}
-
-async function setCart(userId, cartArr) {
-  if (!pool) {
-    memory.cart.set(userId, cartArr);
-    return;
-  }
-  await pool.query(
-    `
-    INSERT INTO carts (user_id, cart_json, updated_at)
-    VALUES ($1,$2,NOW())
-    ON CONFLICT (user_id) DO UPDATE SET
-      cart_json=EXCLUDED.cart_json,
-      updated_at=NOW()
-    `,
-    [userId, cartArr]
-  );
-}
-
-async function clearCart(userId) {
-  await setCart(userId, []);
-}
-
-// =====================
-// Catalog (Clothing Example)
-// =====================
-const SHIPPING_FLAT = 4.99;
-
-const CATALOG = [
-  {
-    id: "hoodies",
-    label: "Hoodies",
-    items: [
-      { id: "hoodie_classic", name: "Classic Hoodie", price: 39.99, sizes: ["XS","S","M","L","XL"], colours: ["Black","Grey","Navy","White"] },
-      { id: "hoodie_zip", name: "Zip Hoodie", price: 44.99, sizes: ["S","M","L","XL"], colours: ["Black","Grey"] },
-    ],
-  },
-  {
-    id: "tshirts",
-    label: "T-Shirts",
-    items: [
-      { id: "tee_classic", name: "Classic Tee", price: 19.99, sizes: ["XS","S","M","L","XL"], colours: ["Black","White","Navy"] },
-      { id: "tee_oversized", name: "Oversized Tee", price: 24.99, sizes: ["S","M","L","XL"], colours: ["Black","Stone","White"] },
-    ],
-  },
-  {
-    id: "caps",
-    label: "Caps",
-    items: [
-      { id: "cap_logo", name: "Logo Cap", price: 14.99, sizes: ["One Size"], colours: ["Black","Navy","White"] },
-    ],
-  },
-];
-
-// helpers
-function money(n) {
-  return `£${Number(n).toFixed(2)}`;
-}
-
-function findCategory(catId) {
-  return CATALOG.find((c) => c.id === catId) || null;
-}
-
-function findItem(catId, itemId) {
-  const c = findCategory(catId);
-  if (!c) return null;
-  return c.items.find((i) => i.id === itemId) || null;
-}
-
-function calcTotals(cart) {
-  const subtotal = cart.reduce((sum, line) => sum + line.lineTotal, 0);
-  const shipping = cart.length ? SHIPPING_FLAT : 0;
-  const total = subtotal + shipping;
-  return { subtotal, shipping, total };
-}
-
-function buildCartEmbed(cart) {
-  const { subtotal, shipping, total } = calcTotals(cart);
-
-  const lines = cart.length
-    ? cart.map((l, idx) => {
-        return `**${idx + 1}. ${l.name}** (${l.size}, ${l.colour}) × **${l.qty}** — ${money(l.lineTotal)}`;
-      }).join("\n")
-    : "_Your basket is empty._";
-
-  const embed = new EmbedBuilder()
-    .setTitle("Clothing Shop — Your basket")
-    .setDescription(lines)
-    .addFields(
-      { name: "Subtotal", value: money(subtotal), inline: true },
-      { name: "Shipping", value: money(shipping), inline: true },
-      { name: "Total", value: money(total), inline: true }
-    )
-    .setFooter({ text: "Use the buttons below to add/remove items, then submit your order." });
-
-  return embed;
-}
-
-function buildReceiptEmbed({ orderLabel, customerTag, profile, cart }) {
-  const { subtotal, shipping, total } = calcTotals(cart);
-
-  const itemsText = cart.map((l) => `• ${l.name} (${l.size}, ${l.colour}) × ${l.qty} — ${money(l.lineTotal)}`).join("\n");
-
-  const address = [
-    profile.fullName,
-    profile.line1,
-    profile.line2 || null,
-    profile.city,
-    profile.postcode,
-    profile.country,
-  ].filter(Boolean).join("\n");
-
-  return new EmbedBuilder()
-    .setTitle(`🧾 New Order — ${orderLabel}`)
-    .setDescription(itemsText || "_No items_")
-    .addFields(
-      { name: "Customer", value: `${customerTag}`, inline: true },
-      { name: "Email", value: profile.email, inline: true },
-      { name: "Shipping Address", value: address, inline: false },
-      { name: "Subtotal", value: money(subtotal), inline: true },
-      { name: "Shipping", value: money(shipping), inline: true },
-      { name: "Total", value: money(total), inline: true }
-    )
-    .setFooter({ text: "Post the payment link in this channel once ready." });
-}
-
-// =====================
-// Discord Client
-// =====================
-const client = new Client({
-  intents: [GatewayIntentBits.Guilds],
-  partials: [Partials.Channel],
+/**
+ * ========= DB =========
+ * IMPORTANT: We DO NOT use cart_json anywhere.
+ * We store cart as normalized rows: carts + cart_items
+ */
+const pool = new Pool({
+  connectionString: DATABASE_URL,
+  ssl: DATABASE_URL.includes('localhost') ? false : { rejectUnauthorized: false },
 });
 
-// =====================
-// Slash Commands
-// =====================
+async function dbInit() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS user_profiles (
+      user_id TEXT PRIMARY KEY,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS shipping_profiles (
+      user_id TEXT PRIMARY KEY REFERENCES user_profiles(user_id) ON DELETE CASCADE,
+      full_name TEXT NOT NULL,
+      email TEXT NOT NULL,
+      address1 TEXT NOT NULL,
+      address2 TEXT,
+      city TEXT NOT NULL,
+      postcode TEXT NOT NULL,
+      country TEXT NOT NULL DEFAULT 'UK',
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS carts (
+      user_id TEXT PRIMARY KEY REFERENCES user_profiles(user_id) ON DELETE CASCADE,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS cart_items (
+      id BIGSERIAL PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES user_profiles(user_id) ON DELETE CASCADE,
+      category TEXT NOT NULL,
+      item_name TEXT NOT NULL,
+      size TEXT NOT NULL,
+      color TEXT NOT NULL,
+      unit_price_pence INT NOT NULL,
+      quantity INT NOT NULL CHECK (quantity > 0),
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS orders (
+      id BIGSERIAL PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES user_profiles(user_id) ON DELETE CASCADE,
+      customer_username TEXT NOT NULL,
+      subtotal_pence INT NOT NULL,
+      shipping_pence INT NOT NULL,
+      total_pence INT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'PENDING',
+      receipt_thread_id TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS order_items (
+      id BIGSERIAL PRIMARY KEY,
+      order_id BIGINT NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+      category TEXT NOT NULL,
+      item_name TEXT NOT NULL,
+      size TEXT NOT NULL,
+      color TEXT NOT NULL,
+      unit_price_pence INT NOT NULL,
+      quantity INT NOT NULL CHECK (quantity > 0)
+    );
+  `);
+}
+
+async function ensureUser(userId) {
+  await pool.query(`INSERT INTO user_profiles (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING`, [userId]);
+  await pool.query(`INSERT INTO carts (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING`, [userId]);
+}
+
+function money(pence) {
+  return `£${(pence / 100).toFixed(2)}`;
+}
+
+const SHIPPING_PENCE = 499;
+
+/**
+ * ========= SHOP CATALOG =========
+ * Edit these products and prices however you like.
+ * Prices are in PENCE to avoid decimals.
+ */
+const CATALOG = {
+  'T-Shirts': [
+    { name: 'T-Shirt', prices: { default: 1999 }, sizes: ['S', 'M', 'L', 'XL'], colors: ['White', 'Black', 'Navy', 'Grey'] },
+  ],
+  Hoodies: [
+    { name: 'Hoodie', prices: { default: 3999 }, sizes: ['S', 'M', 'L', 'XL'], colors: ['Black', 'Grey', 'White'] },
+  ],
+  Caps: [
+    { name: 'Cap', prices: { default: 1499 }, sizes: ['One Size'], colors: ['Black', 'White'] },
+  ],
+};
+
+/**
+ * ========= IN-MEMORY SESSION (per user step) =========
+ * This avoids needing extra DB columns for "current step".
+ * If bot restarts, user can just click menu again.
+ */
+const sessions = new Map(); // userId -> { step, category, itemName, size, color }
+
+function setSession(userId, patch) {
+  const cur = sessions.get(userId) || {};
+  sessions.set(userId, { ...cur, ...patch });
+}
+
+function clearSession(userId) {
+  sessions.delete(userId);
+}
+
+/**
+ * ========= DISCORD CLIENT =========
+ */
+const client = new Client({
+  intents: [GatewayIntentBits.Guilds],
+});
+
+/**
+ * ========= SLASH COMMANDS =========
+ */
 const commands = [
   {
-    name: "setupshop",
-    description: "Post (or refresh) the shop menu message in the menu channel.",
+    name: 'setupshop',
+    description: 'Post (or refresh) the shop menu message in the menu channel',
   },
   {
-    name: "resetprofile",
-    description: "Delete your saved shipping profile (you will be prompted again).",
+    name: 'clearcart',
+    description: 'Clear your cart',
   },
   {
-    name: "clearcart",
-    description: "Clear your current cart.",
+    name: 'resetprofile',
+    description: 'Delete your saved shipping profile (you will be prompted again)',
   },
 ];
 
 async function registerCommands() {
-  const rest = new REST({ version: "10" }).setToken(DISCORD_TOKEN);
+  const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
   await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
-  console.log("✅ Slash commands registered");
 }
 
-// =====================
-// UI Builders
-// =====================
-function menuMessageComponents() {
-  const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId("start_order")
-      .setLabel("Click to see our menu")
-      .setStyle(ButtonStyle.Primary)
-  );
-
-  return [row];
-}
-
-function categorySelectRow() {
-  const menu = new StringSelectMenuBuilder()
-    .setCustomId("select_category")
-    .setPlaceholder("Choose a category…")
-    .addOptions(CATALOG.map((c) => ({ label: c.label, value: c.id })));
-
-  return [new ActionRowBuilder().addComponents(menu)];
-}
-
-function itemSelectRow(catId) {
-  const c = findCategory(catId);
-  const menu = new StringSelectMenuBuilder()
-    .setCustomId(`select_item:${catId}`)
-    .setPlaceholder("Choose an item…")
-    .addOptions(
-      c.items.map((i) => ({
-        label: `${i.name} — ${money(i.price)}`,
-        value: i.id,
-      }))
+/**
+ * ========= UI BUILDERS =========
+ */
+function menuWelcomeMessage() {
+  const embed = new EmbedBuilder()
+    .setTitle('Welcome to Clothing Shop!')
+    .setDescription(
+      [
+        '**How it works:**',
+        '1) Click the button below to get started',
+        '2) Enter your shipping details',
+        '3) Browse categories and select items',
+        '4) Add multiple items to your basket',
+        '5) Submit your order when you’re done',
+        '',
+        'Once submitted, you’ll receive a **private receipt thread** where the team can send your payment link.',
+      ].join('\n')
     );
 
-  return [new ActionRowBuilder().addComponents(menu)];
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('shop_open').setLabel('Click to see our menu').setStyle(ButtonStyle.Primary)
+  );
+
+  return { embeds: [embed], components: [row] };
 }
 
-function sizeSelectRow(catId, itemId) {
-  const item = findItem(catId, itemId);
-  const menu = new StringSelectMenuBuilder()
-    .setCustomId(`select_size:${catId}:${itemId}`)
-    .setPlaceholder("Choose a size…")
-    .addOptions(item.sizes.map((s) => ({ label: s, value: s })));
+function categorySelect() {
+  const options = Object.keys(CATALOG).map((cat) => ({
+    label: cat,
+    value: cat,
+  }));
 
-  return [new ActionRowBuilder().addComponents(menu)];
+  return new ActionRowBuilder().addComponents(
+    new SelectMenuBuilder()
+      .setCustomId('shop_category')
+      .setPlaceholder('Select a category…')
+      .addOptions(options)
+  );
 }
 
-function colourSelectRow(catId, itemId, size) {
-  const item = findItem(catId, itemId);
-  const menu = new StringSelectMenuBuilder()
-    .setCustomId(`select_colour:${catId}:${itemId}:${encodeURIComponent(size)}`)
-    .setPlaceholder("Choose a colour…")
-    .addOptions(item.colours.map((c) => ({ label: c, value: c })));
-
-  return [new ActionRowBuilder().addComponents(menu)];
+function itemSelect(category) {
+  const items = CATALOG[category] || [];
+  const options = items.map((i) => ({ label: i.name, value: i.name }));
+  return new ActionRowBuilder().addComponents(
+    new SelectMenuBuilder()
+      .setCustomId('shop_item')
+      .setPlaceholder('Select an item…')
+      .addOptions(options)
+  );
 }
 
-function qtyButtonsRow(catId, itemId, size, colour) {
-  const base = `qty:${catId}:${itemId}:${encodeURIComponent(size)}:${encodeURIComponent(colour)}:`;
-  return [
-    new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(base + "1").setLabel("1").setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId(base + "2").setLabel("2").setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId(base + "3").setLabel("3").setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId(base + "4").setLabel("4").setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId(base + "5").setLabel("5").setStyle(ButtonStyle.Secondary),
-    ),
-    new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(base + "6").setLabel("6").setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId(base + "7").setLabel("7").setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId(base + "8").setLabel("8").setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId(base + "9").setLabel("9").setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId(base + "other").setLabel("Other…").setStyle(ButtonStyle.Primary),
-    ),
-  ];
+function sizeSelect(category, itemName) {
+  const item = (CATALOG[category] || []).find((x) => x.name === itemName);
+  const options = (item?.sizes || ['One Size']).map((s) => ({ label: s, value: s }));
+  return new ActionRowBuilder().addComponents(
+    new SelectMenuBuilder().setCustomId('shop_size').setPlaceholder('Select a size…').addOptions(options)
+  );
 }
 
-function basketActionRows(cart) {
-  const rows = [];
+function colorSelect(category, itemName) {
+  const item = (CATALOG[category] || []).find((x) => x.name === itemName);
+  const options = (item?.colors || ['Default']).map((c) => ({ label: c, value: c }));
+  return new ActionRowBuilder().addComponents(
+    new SelectMenuBuilder().setCustomId('shop_color').setPlaceholder('Select a colour…').addOptions(options)
+  );
+}
 
-  // "Update Qty" button per first line only (keep it simple)
-  // You can extend later to per-line updates with selects.
-  const hasItems = cart.length > 0;
-
-  rows.push(
-    new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId("basket_add_another")
-        .setLabel("Add Another Item")
-        .setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder()
-        .setCustomId("basket_submit")
-        .setLabel("Submit Order ✅")
-        .setStyle(ButtonStyle.Success)
-        .setDisabled(!hasItems),
+function qtyButtons() {
+  const row1 = new ActionRowBuilder().addComponents(
+    [1, 2, 3, 4, 5].map((n) =>
+      new ButtonBuilder().setCustomId(`shop_qty_${n}`).setLabel(String(n)).setStyle(ButtonStyle.Secondary)
     )
   );
 
-  rows.push(
-    new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId("basket_remove_last")
-        .setLabel("Remove Last 🗑️")
-        .setStyle(ButtonStyle.Danger)
-        .setDisabled(!hasItems),
-      new ButtonBuilder()
-        .setCustomId("basket_clear")
-        .setLabel("Clear Basket")
-        .setStyle(ButtonStyle.Secondary)
-        .setDisabled(!hasItems),
-    )
+  const row2 = new ActionRowBuilder().addComponents(
+    [6, 7, 8, 9].map((n) =>
+      new ButtonBuilder().setCustomId(`shop_qty_${n}`).setLabel(String(n)).setStyle(ButtonStyle.Secondary)
+    ),
+    new ButtonBuilder().setCustomId('shop_qty_other').setLabel('Other…').setStyle(ButtonStyle.Primary)
   );
 
-  return rows;
+  return [row1, row2];
 }
 
-// =====================
-// Shipping Modal
-// =====================
-function buildShippingModal() {
-  const modal = new ModalBuilder()
-    .setCustomId("shipping_modal")
-    .setTitle("Shipping details");
+function basketActions() {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('cart_add_more').setLabel('Add Another Item').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('cart_clear').setLabel('Clear Basket').setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId('cart_submit').setLabel('Submit Order ✅').setStyle(ButtonStyle.Success)
+  );
+}
 
-  const fullName = new TextInputBuilder()
-    .setCustomId("full_name")
-    .setLabel("Full name")
-    .setStyle(TextInputStyle.Short)
-    .setRequired(true);
+function shippingModal() {
+  const modal = new ModalBuilder().setCustomId('shipping_modal').setTitle('Shipping details');
 
-  const email = new TextInputBuilder()
-    .setCustomId("email")
-    .setLabel("Email")
-    .setStyle(TextInputStyle.Short)
-    .setRequired(true);
-
-  const line1 = new TextInputBuilder()
-    .setCustomId("line1")
-    .setLabel("Address line 1")
-    .setStyle(TextInputStyle.Short)
-    .setRequired(true);
-
-  const line2 = new TextInputBuilder()
-    .setCustomId("line2")
-    .setLabel("Address line 2 (optional)")
-    .setStyle(TextInputStyle.Short)
-    .setRequired(false);
-
-  const cityPostCountry = new TextInputBuilder()
-    .setCustomId("city_post_country")
-    .setLabel("City, Postcode, Country (comma separated)")
-    .setStyle(TextInputStyle.Short)
-    .setRequired(true)
-    .setPlaceholder("e.g. London, SW1A 1AA, UK");
+  const fullName = new TextInputBuilder().setCustomId('full_name').setLabel('Full name').setStyle(TextInputStyle.Short).setRequired(true);
+  const email = new TextInputBuilder().setCustomId('email').setLabel('Email').setStyle(TextInputStyle.Short).setRequired(true);
+  const address1 = new TextInputBuilder().setCustomId('address1').setLabel('Address line 1').setStyle(TextInputStyle.Short).setRequired(true);
+  const address2 = new TextInputBuilder().setCustomId('address2').setLabel('Address line 2 (optional)').setStyle(TextInputStyle.Short).setRequired(false);
+  const city = new TextInputBuilder().setCustomId('city').setLabel('City').setStyle(TextInputStyle.Short).setRequired(true);
+  const postcode = new TextInputBuilder().setCustomId('postcode').setLabel('Postcode').setStyle(TextInputStyle.Short).setRequired(true);
 
   modal.addComponents(
     new ActionRowBuilder().addComponents(fullName),
     new ActionRowBuilder().addComponents(email),
-    new ActionRowBuilder().addComponents(line1),
-    new ActionRowBuilder().addComponents(line2),
-    new ActionRowBuilder().addComponents(cityPostCountry),
+    new ActionRowBuilder().addComponents(address1),
+    new ActionRowBuilder().addComponents(address2),
+    new ActionRowBuilder().addComponents(city),
+    new ActionRowBuilder().addComponents(postcode)
   );
 
   return modal;
 }
 
-// =====================
-// Private Order Channel (THE NEW PART)
-// =====================
-async function createPrivateOrderChannel({
-  guild,
-  customerId,
-  staffRoleId,
-  ordersCategoryId,
-  channelName,
-}) {
-  const channel = await guild.channels.create({
-    name: channelName,
-    type: ChannelType.GuildText,
-    parent: ordersCategoryId,
-    permissionOverwrites: [
-      {
-        id: guild.id, // @everyone
-        deny: [PermissionsBitField.Flags.ViewChannel],
-      },
-      {
-        id: staffRoleId,
-        allow: [
-          PermissionsBitField.Flags.ViewChannel,
-          PermissionsBitField.Flags.SendMessages,
-          PermissionsBitField.Flags.ReadMessageHistory,
-        ],
-      },
-      {
-        id: customerId,
-        allow: [
-          PermissionsBitField.Flags.ViewChannel,
-          PermissionsBitField.Flags.SendMessages,
-          PermissionsBitField.Flags.ReadMessageHistory,
-        ],
-      },
-      {
-        id: guild.members.me.id, // bot
-        allow: [
-          PermissionsBitField.Flags.ViewChannel,
-          PermissionsBitField.Flags.SendMessages,
-          PermissionsBitField.Flags.ReadMessageHistory,
-          PermissionsBitField.Flags.ManageChannels,
-        ],
-      },
-    ],
-  });
+function otherQtyModal() {
+  const modal = new ModalBuilder().setCustomId('qty_modal').setTitle('Quantity');
 
-  return channel;
+  const qty = new TextInputBuilder()
+    .setCustomId('qty')
+    .setLabel('Enter quantity (1–99)')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true);
+
+  modal.addComponents(new ActionRowBuilder().addComponents(qty));
+  return modal;
 }
 
-// =====================
-// Menu Posting
-// =====================
-async function postOrRefreshMenu(guild) {
-  const channel = await guild.channels.fetch(MENU_CHANNEL_ID);
-  if (!channel) throw new Error("MENU_CHANNEL_ID not found");
+/**
+ * ========= CART / ORDER HELPERS =========
+ */
+async function getCart(userId) {
+  const { rows } = await pool.query(
+    `SELECT id, category, item_name, size, color, unit_price_pence, quantity
+     FROM cart_items
+     WHERE user_id = $1
+     ORDER BY created_at ASC`,
+    [userId]
+  );
+  return rows;
+}
 
-  const embed = new EmbedBuilder()
-    .setTitle("Welcome to the Shop!")
+async function addToCart(userId, { category, itemName, size, color, unitPricePence, quantity }) {
+  await pool.query(
+    `INSERT INTO cart_items (user_id, category, item_name, size, color, unit_price_pence, quantity)
+     VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+    [userId, category, itemName, size, color, unitPricePence, quantity]
+  );
+  await pool.query(`UPDATE carts SET updated_at = NOW() WHERE user_id = $1`, [userId]);
+}
+
+async function clearCart(userId) {
+  await pool.query(`DELETE FROM cart_items WHERE user_id = $1`, [userId]);
+  await pool.query(`UPDATE carts SET updated_at = NOW() WHERE user_id = $1`, [userId]);
+}
+
+function calcTotals(cartRows) {
+  const subtotal = cartRows.reduce((sum, r) => sum + r.unit_price_pence * r.quantity, 0);
+  const shipping = cartRows.length ? SHIPPING_PENCE : 0;
+  const total = subtotal + shipping;
+  return { subtotal, shipping, total };
+}
+
+function renderBasketEmbed(cartRows) {
+  const { subtotal, shipping, total } = calcTotals(cartRows);
+
+  const lines = cartRows.length
+    ? cartRows.map((r) => `• **${r.item_name}** (${r.size}, ${r.color}) × **${r.quantity}** — ${money(r.unit_price_pence * r.quantity)}`)
+    : ['(Basket is empty)'];
+
+  return new EmbedBuilder()
+    .setTitle('Clothing Shop — Your basket')
+    .setDescription(lines.join('\n'))
+    .addFields(
+      { name: 'Subtotal', value: money(subtotal), inline: true },
+      { name: 'Shipping', value: money(shipping), inline: true },
+      { name: 'Total', value: money(total), inline: true }
+    );
+}
+
+async function getShipping(userId) {
+  const { rows } = await pool.query(`SELECT * FROM shipping_profiles WHERE user_id = $1`, [userId]);
+  return rows[0] || null;
+}
+
+async function upsertShipping(userId, profile) {
+  await pool.query(
+    `INSERT INTO shipping_profiles (user_id, full_name, email, address1, address2, city, postcode, country)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,'UK')
+     ON CONFLICT (user_id) DO UPDATE SET
+       full_name = EXCLUDED.full_name,
+       email = EXCLUDED.email,
+       address1 = EXCLUDED.address1,
+       address2 = EXCLUDED.address2,
+       city = EXCLUDED.city,
+       postcode = EXCLUDED.postcode,
+       country = EXCLUDED.country,
+       updated_at = NOW()`,
+    [userId, profile.full_name, profile.email, profile.address1, profile.address2, profile.city, profile.postcode]
+  );
+}
+
+async function deleteShipping(userId) {
+  await pool.query(`DELETE FROM shipping_profiles WHERE user_id = $1`, [userId]);
+}
+
+/**
+ * Creates a PRIVATE receipt thread in the orders channel and adds the customer.
+ * This is the “customer receipt channel” you wanted.
+ */
+async function createReceiptThread({ guild, ordersChannelId, customerUser, orderId }) {
+  const ordersChannel = await guild.channels.fetch(ordersChannelId);
+  if (!ordersChannel || ordersChannel.type !== ChannelType.GuildText) {
+    throw new Error('ORDERS_CHANNEL_ID must be a normal text channel');
+  }
+
+  // Private thread so only added members + staff (with perms) can see
+  const thread = await ordersChannel.threads.create({
+    name: `order-${customerUser.username}-${orderId}`,
+    autoArchiveDuration: 1440, // 24h
+    type: ChannelType.PrivateThread,
+    reason: `Receipt thread for order ${orderId}`,
+  });
+
+  // Add customer to the private thread
+  await thread.members.add(customerUser.id);
+
+  return thread;
+}
+
+/**
+ * ========= INTERACTION HANDLERS =========
+ */
+async function postMenuMessage() {
+  const ch = await client.channels.fetch(MENU_CHANNEL_ID);
+  if (!ch || ch.type !== ChannelType.GuildText) throw new Error('MENU_CHANNEL_ID must be a text channel');
+
+  const msg = await ch.send(menuWelcomeMessage());
+  return msg;
+}
+
+async function respondEphemeral(interaction, content, components = []) {
+  if (interaction.deferred || interaction.replied) {
+    return interaction.followUp({ content, components, ephemeral: true });
+  }
+  return interaction.reply({ content, components, ephemeral: true });
+}
+
+async function handleShopOpen(interaction) {
+  const userId = interaction.user.id;
+  await ensureUser(userId);
+
+  const shipping = await getShipping(userId);
+  if (!shipping) {
+    // Force shipping profile first
+    await interaction.showModal(shippingModal());
+    return;
+  }
+
+  clearSession(userId);
+  setSession(userId, { step: 'category' });
+
+  await respondEphemeral(interaction, 'Select a category:', [categorySelect()]);
+}
+
+async function handleCategory(interaction) {
+  const userId = interaction.user.id;
+  const category = interaction.values[0];
+  setSession(userId, { step: 'item', category });
+
+  await respondEphemeral(interaction, `Selected category: **${category}**\nNow choose an item:`, [itemSelect(category)]);
+}
+
+async function handleItem(interaction) {
+  const userId = interaction.user.id;
+  const itemName = interaction.values[0];
+  const session = sessions.get(userId);
+  if (!session?.category) return respondEphemeral(interaction, 'Session expired. Click the menu button again.');
+
+  setSession(userId, { step: 'size', itemName });
+
+  await respondEphemeral(interaction, `Selected item: **${itemName}**\nChoose a size:`, [sizeSelect(session.category, itemName)]);
+}
+
+async function handleSize(interaction) {
+  const userId = interaction.user.id;
+  const size = interaction.values[0];
+  const session = sessions.get(userId);
+  if (!session?.category || !session?.itemName) return respondEphemeral(interaction, 'Session expired. Click the menu button again.');
+
+  setSession(userId, { step: 'color', size });
+
+  await respondEphemeral(interaction, `Size **${size}** selected.\nChoose a colour:`, [colorSelect(session.category, session.itemName)]);
+}
+
+async function handleColor(interaction) {
+  const userId = interaction.user.id;
+  const color = interaction.values[0];
+  const session = sessions.get(userId);
+  if (!session?.category || !session?.itemName || !session?.size) return respondEphemeral(interaction, 'Session expired. Click the menu button again.');
+
+  setSession(userId, { step: 'qty', color });
+
+  const item = (CATALOG[session.category] || []).find((x) => x.name === session.itemName);
+  await respondEphemeral(interaction, `Colour **${color}** selected — how many?`, qtyButtons());
+}
+
+async function handleQty(interaction, quantity) {
+  const userId = interaction.user.id;
+  const session = sessions.get(userId);
+  if (!session?.category || !session?.itemName || !session?.size || !session?.color) {
+    return respondEphemeral(interaction, 'Session expired. Click the menu button again.');
+  }
+
+  const item = (CATALOG[session.category] || []).find((x) => x.name === session.itemName);
+  const unitPricePence = item?.prices?.default ?? 0;
+
+  await addToCart(userId, {
+    category: session.category,
+    itemName: session.itemName,
+    size: session.size,
+    color: session.color,
+    unitPricePence,
+    quantity,
+  });
+
+  clearSession(userId);
+
+  const cartRows = await getCart(userId);
+  const embed = renderBasketEmbed(cartRows);
+
+  await respondEphemeral(interaction, '✅ Added to basket.', [basketActions()]);
+  // Follow-up with basket details (still ephemeral)
+  await interaction.followUp({ embeds: [embed], ephemeral: true });
+}
+
+async function handleSubmitOrder(interaction) {
+  const userId = interaction.user.id;
+  await ensureUser(userId);
+
+  const cartRows = await getCart(userId);
+  if (!cartRows.length) return respondEphemeral(interaction, 'Your basket is empty.');
+
+  const shipping = await getShipping(userId);
+  if (!shipping) {
+    await interaction.showModal(shippingModal());
+    return;
+  }
+
+  const { subtotal, shipping: ship, total } = calcTotals(cartRows);
+
+  // Create order
+  const orderRes = await pool.query(
+    `INSERT INTO orders (user_id, customer_username, subtotal_pence, shipping_pence, total_pence, status)
+     VALUES ($1,$2,$3,$4,$5,'PENDING')
+     RETURNING id`,
+    [userId, interaction.user.username, subtotal, ship, total]
+  );
+  const orderId = orderRes.rows[0].id;
+
+  // Create order_items from cart
+  for (const r of cartRows) {
+    await pool.query(
+      `INSERT INTO order_items (order_id, category, item_name, size, color, unit_price_pence, quantity)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      [orderId, r.category, r.item_name, r.size, r.color, r.unit_price_pence, r.quantity]
+    );
+  }
+
+  // Clear cart
+  await clearCart(userId);
+
+  // Create receipt thread
+  const thread = await createReceiptThread({
+    guild: interaction.guild,
+    ordersChannelId: ORDERS_CHANNEL_ID,
+    customerUser: interaction.user,
+    orderId,
+  });
+
+  await pool.query(`UPDATE orders SET receipt_thread_id = $1 WHERE id = $2`, [thread.id, orderId]);
+
+  // Post receipt in thread
+  const receiptEmbed = new EmbedBuilder()
+    .setTitle(`New Order — #${orderId}`)
     .setDescription(
-      [
-        "**How it works:**",
-        "1) Click the button below to get started",
-        "2) Enter your name, email and shipping address",
-        "3) Browse categories and select items",
-        "4) Add multiple items to your basket",
-        "5) Submit your order when you're done",
-        "",
-        "✅ After submitting, a **private order channel** will be created for you where staff will send a payment link.",
-      ].join("\n")
+      cartRows
+        .map((r) => `• **${r.item_name}** (${r.size}, ${r.color}) × **${r.quantity}** — ${money(r.unit_price_pence * r.quantity)}`)
+        .join('\n')
+    )
+    .addFields(
+      { name: 'Customer', value: `<@${interaction.user.id}>`, inline: true },
+      { name: 'Email', value: shipping.email, inline: true },
+      {
+        name: 'Shipping Address',
+        value: `${shipping.full_name}\n${shipping.address1}${shipping.address2 ? `\n${shipping.address2}` : ''}\n${shipping.city}\n${shipping.postcode}\n${shipping.country}`,
+      },
+      { name: 'Subtotal', value: money(subtotal), inline: true },
+      { name: 'Shipping', value: money(ship), inline: true },
+      { name: 'Total', value: money(total), inline: true }
     );
 
-  await channel.send({
-    embeds: [embed],
-    components: menuMessageComponents(),
+  await thread.send({
+    content: `<@&${STAFF_ROLE_ID}> New order received ✅`,
+    embeds: [receiptEmbed],
   });
+
+  await thread.send(`Hi <@${interaction.user.id}> — thanks! We’ll send your payment link here shortly.`);
+
+  // Tell customer where their receipt is
+  await respondEphemeral(
+    interaction,
+    `✅ Order submitted! Your private receipt thread is ready: **${thread.name}**\n(You can reply there and we’ll send the payment link in that thread.)`
+  );
 }
 
-// =====================
-// Interaction Handling
-// =====================
-client.on("interactionCreate", async (interaction) => {
+/**
+ * ========= MAIN INTERACTION ROUTER =========
+ */
+client.on(Events.InteractionCreate, async (interaction) => {
   try {
     // Slash commands
     if (interaction.isChatInputCommand()) {
-      if (interaction.commandName === "setupshop") {
-        await interaction.deferReply({ ephemeral: true });
-        await postOrRefreshMenu(interaction.guild);
-        await interaction.editReply("✅ Shop menu posted in the menu channel.");
-        return;
+      const userId = interaction.user.id;
+      await ensureUser(userId);
+
+      if (interaction.commandName === 'setupshop') {
+        // Optional: only allow admins to run
+        // if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) return respondEphemeral(interaction, 'Admin only.');
+        await postMenuMessage();
+        return respondEphemeral(interaction, '✅ Shop menu message posted/refreshed in the menu channel.');
       }
 
-      if (interaction.commandName === "resetprofile") {
-        await interaction.deferReply({ ephemeral: true });
-        if (pool) {
-          await pool.query(`DELETE FROM shipping_profiles WHERE user_id=$1`, [interaction.user.id]);
-        } else {
-          memory.shipping.delete(interaction.user.id);
-        }
-        await interaction.editReply("✅ Your shipping profile has been reset. You’ll be prompted again next time.");
-        return;
+      if (interaction.commandName === 'clearcart') {
+        await clearCart(userId);
+        return respondEphemeral(interaction, '✅ Your basket has been cleared.');
       }
 
-      if (interaction.commandName === "clearcart") {
-        await interaction.deferReply({ ephemeral: true });
-        await clearCart(interaction.user.id);
-        await interaction.editReply("✅ Your cart has been cleared.");
-        return;
+      if (interaction.commandName === 'resetprofile') {
+        await deleteShipping(userId);
+        return respondEphemeral(interaction, '✅ Shipping profile deleted. Next order will prompt you again.');
       }
     }
 
-    // Button interactions
+    // Buttons
     if (interaction.isButton()) {
-      const userId = interaction.user.id;
+      const id = interaction.customId;
 
-      // Start Order
-      if (interaction.customId === "start_order") {
-        const profile = await getShippingProfile(userId);
-        if (!profile) {
-          // force shipping first
-          await interaction.showModal(buildShippingModal());
-          return;
-        }
-
-        // show categories (ephemeral)
-        await interaction.reply({
-          content: "Thanks! Choose a category:",
-          components: categorySelectRow(),
-          ephemeral: true,
-        });
-        return;
+      if (id === 'shop_open') return handleShopOpen(interaction);
+      if (id === 'cart_add_more') {
+        clearSession(interaction.user.id);
+        setSession(interaction.user.id, { step: 'category' });
+        return respondEphemeral(interaction, 'Select a category:', [categorySelect()]);
       }
-
-      // Basket actions
-      if (interaction.customId === "basket_add_another") {
-        await interaction.reply({
-          content: "Choose a category:",
-          components: categorySelectRow(),
-          ephemeral: true,
-        });
-        return;
+      if (id === 'cart_clear') {
+        await clearCart(interaction.user.id);
+        return respondEphemeral(interaction, '✅ Basket cleared.');
       }
+      if (id === 'cart_submit') return handleSubmitOrder(interaction);
 
-      if (interaction.customId === "basket_remove_last") {
-        const cart = await getCart(userId);
-        cart.pop();
-        await setCart(userId, cart);
-
-        await interaction.reply({
-          content: cart.length ? "🗑️ Removed last item." : "🗑️ Basket is now empty.",
-          embeds: [buildCartEmbed(cart)],
-          components: basketActionRows(cart),
-          ephemeral: true,
-        });
-        return;
-      }
-
-      if (interaction.customId === "basket_clear") {
-        await clearCart(userId);
-        const cart = [];
-        await interaction.reply({
-          content: "✅ Basket cleared.",
-          embeds: [buildCartEmbed(cart)],
-          components: basketActionRows(cart),
-          ephemeral: true,
-        });
-        return;
-      }
-
-      // ✅ Submit Order -> Create PRIVATE order channel + receipt + ping staff
-      if (interaction.customId === "basket_submit") {
-        const profile = await getShippingProfile(userId);
-        if (!profile) {
-          await interaction.reply({
-            content: "⚠️ Missing shipping details. Please start again and fill out your shipping info.",
-            ephemeral: true,
-          });
-          return;
-        }
-
-        const cart = await getCart(userId);
-        if (!cart.length) {
-          await interaction.reply({ content: "Your basket is empty.", ephemeral: true });
-          return;
-        }
-
-        // Create channel name
-        const orderNumber = Date.now().toString().slice(-6);
-        const safeName = interaction.user.username.toLowerCase().replace(/[^a-z0-9]/g, "");
-        const channelName = `order-${safeName}-${orderNumber}`;
-
-        const orderChannel = await createPrivateOrderChannel({
-          guild: interaction.guild,
-          customerId: userId,
-          staffRoleId: STAFF_ROLE_ID,
-          ordersCategoryId: ORDERS_CATEGORY_ID,
-          channelName,
-        });
-
-        const receipt = buildReceiptEmbed({
-          orderLabel: channelName,
-          customerTag: `<@${userId}>`,
-          profile,
-          cart,
-        });
-
-        await orderChannel.send({
-          content: `@here <@&${STAFF_ROLE_ID}> **New order received** from <@${userId}>.\n\n**Post the Stripe payment link in this channel.**`,
-          embeds: [receipt],
-        });
-
-        await orderChannel.send({
-          content: `✅ **Customer:** this is your private order channel.\nStaff will send your payment link here shortly.`,
-        });
-
-        // Optional: DM the customer with the channel mention
-        try {
-          await interaction.user.send(`✅ Your order was received. Please check this channel for payment: ${orderChannel}`);
-        } catch (_) {}
-
-        // Confirm to customer in the menu channel (ephemeral)
-        await interaction.reply({
-          content: `✅ Order submitted! Your private order channel is: ${orderChannel}`,
-          ephemeral: true,
-        });
-
-        // Clear cart after submit
-        await clearCart(userId);
-        return;
-      }
-
-      // Quantity buttons
-      if (interaction.customId.startsWith("qty:")) {
-        // qty:catId:itemId:size:colour:qty
-        const parts = interaction.customId.split(":");
-        const catId = parts[1];
-        const itemId = parts[2];
-        const size = decodeURIComponent(parts[3]);
-        const colour = decodeURIComponent(parts[4]);
-        const qtyStr = parts[5];
-
-        if (qtyStr === "other") {
-          await interaction.reply({
-            content: "Type a quantity number (1–99) in the chat, then press Enter.",
-            ephemeral: true,
-          });
-
-          // NOTE: For simplicity, we avoid message listeners.
-          // If you want "Other..." fully implemented, tell me and I’ll add it cleanly.
-          return;
-        }
-
+      if (id.startsWith('shop_qty_')) {
+        const qtyStr = id.replace('shop_qty_', '');
         const qty = Number(qtyStr);
-        if (!Number.isInteger(qty) || qty < 1 || qty > 99) {
-          await interaction.reply({ content: "Invalid quantity.", ephemeral: true });
-          return;
-        }
+        if (!Number.isFinite(qty) || qty < 1) return respondEphemeral(interaction, 'Invalid quantity.');
+        return handleQty(interaction, qty);
+      }
 
-        const item = findItem(catId, itemId);
-        if (!item) {
-          await interaction.reply({ content: "Item not found.", ephemeral: true });
-          return;
-        }
-
-        const cart = await getCart(userId);
-        const lineTotal = item.price * qty;
-
-        cart.push({
-          catId,
-          itemId,
-          name: item.name,
-          unitPrice: item.price,
-          size,
-          colour,
-          qty,
-          lineTotal,
-        });
-
-        await setCart(userId, cart);
-
-        await interaction.reply({
-          content: "✅ Added to basket.",
-          embeds: [buildCartEmbed(cart)],
-          components: basketActionRows(cart),
-          ephemeral: true,
-        });
-
-        return;
+      if (id === 'shop_qty_other') {
+        return interaction.showModal(otherQtyModal());
       }
     }
 
     // Select menus
-    if (interaction.isStringSelectMenu()) {
-      const userId = interaction.user.id;
-
-      // Must have shipping first (hard enforcement)
-      const profile = await getShippingProfile(userId);
-      if (!profile) {
-        await interaction.reply({ content: "Please enter shipping details first.", ephemeral: true });
-        await interaction.showModal(buildShippingModal());
-        return;
-      }
-
-      // Choose category
-      if (interaction.customId === "select_category") {
-        const catId = interaction.values[0];
-        await interaction.reply({
-          content: `✅ Selected category: **${findCategory(catId)?.label || catId}**\nNow choose an item:`,
-          components: itemSelectRow(catId),
-          ephemeral: true,
-        });
-        return;
-      }
-
-      // Choose item
-      if (interaction.customId.startsWith("select_item:")) {
-        const catId = interaction.customId.split(":")[1];
-        const itemId = interaction.values[0];
-        await interaction.reply({
-          content: `✅ Selected item. Choose a size:`,
-          components: sizeSelectRow(catId, itemId),
-          ephemeral: true,
-        });
-        return;
-      }
-
-      // Choose size
-      if (interaction.customId.startsWith("select_size:")) {
-        const [, catId, itemId] = interaction.customId.split(":");
-        const size = interaction.values[0];
-        await interaction.reply({
-          content: `✅ Size **${size}** selected. Choose a colour:`,
-          components: colourSelectRow(catId, itemId, size),
-          ephemeral: true,
-        });
-        return;
-      }
-
-      // Choose colour
-      if (interaction.customId.startsWith("select_colour:")) {
-        const [, catId, itemId, encSize] = interaction.customId.split(":");
-        const size = decodeURIComponent(encSize);
-        const colour = interaction.values[0];
-
-        await interaction.reply({
-          content: `✅ Colour **${colour}** selected — how many?`,
-          components: qtyButtonsRow(catId, itemId, size, colour),
-          ephemeral: true,
-        });
-        return;
-      }
+    if (interaction.isSelectMenu()) {
+      const id = interaction.customId;
+      if (id === 'shop_category') return handleCategory(interaction);
+      if (id === 'shop_item') return handleItem(interaction);
+      if (id === 'shop_size') return handleSize(interaction);
+      if (id === 'shop_color') return handleColor(interaction);
     }
 
-    // Shipping modal submit
-    if (interaction.isModalSubmit()) {
-      if (interaction.customId !== "shipping_modal") return;
+    // Modals
+    if (interaction.type === InteractionType.ModalSubmit) {
+      if (interaction.customId === 'shipping_modal') {
+        const userId = interaction.user.id;
+        await ensureUser(userId);
 
-      const fullName = interaction.fields.getTextInputValue("full_name").trim();
-      const email = interaction.fields.getTextInputValue("email").trim();
-      const line1 = interaction.fields.getTextInputValue("line1").trim();
-      const line2 = interaction.fields.getTextInputValue("line2").trim();
-      const cpc = interaction.fields.getTextInputValue("city_post_country").trim();
+        const profile = {
+          full_name: interaction.fields.getTextInputValue('full_name'),
+          email: interaction.fields.getTextInputValue('email'),
+          address1: interaction.fields.getTextInputValue('address1'),
+          address2: interaction.fields.getTextInputValue('address2'),
+          city: interaction.fields.getTextInputValue('city'),
+          postcode: interaction.fields.getTextInputValue('postcode'),
+        };
 
-      // Parse "City, Postcode, Country"
-      const parts = cpc.split(",").map((p) => p.trim()).filter(Boolean);
-      if (parts.length < 3) {
-        await interaction.reply({
-          content: "⚠️ Please format as: City, Postcode, Country (comma separated).",
-          ephemeral: true,
-        });
-        return;
+        await upsertShipping(userId, profile);
+
+        clearSession(userId);
+        setSession(userId, { step: 'category' });
+
+        return respondEphemeral(interaction, '✅ Shipping details saved. Now select a category:', [categorySelect()]);
       }
 
-      const city = parts[0];
-      const postcode = parts[1];
-      const country = parts.slice(2).join(", ");
-
-      const profile = { fullName, email, line1, line2, city, postcode, country };
-      await upsertShippingProfile(interaction.user.id, profile);
-
-      // After saving, show categories
-      await interaction.reply({
-        content: "✅ Shipping saved. Choose a category:",
-        components: categorySelectRow(),
-        ephemeral: true,
-      });
-
-      return;
+      if (interaction.customId === 'qty_modal') {
+        const qtyRaw = interaction.fields.getTextInputValue('qty').trim();
+        const qty = Number(qtyRaw);
+        if (!Number.isFinite(qty) || qty < 1 || qty > 99) {
+          return respondEphemeral(interaction, 'Please enter a number between 1 and 99.');
+        }
+        return handleQty(interaction, qty);
+      }
     }
   } catch (err) {
     console.error(err);
-    // Always try to respond without breaking UX
-    if (interaction.isRepliable()) {
-      try {
-        if (interaction.deferred || interaction.replied) {
-          await interaction.followUp({ content: `⚠️ Error: ${err.message}`, ephemeral: true });
-        } else {
-          await interaction.reply({ content: `⚠️ Error: ${err.message}`, ephemeral: true });
-        }
-      } catch (_) {}
-    }
+    try {
+      await respondEphemeral(interaction, `❌ Error: ${err.message || String(err)}`);
+    } catch {}
   }
 });
 
-// =====================
-// Startup
-// =====================
-client.once("ready", async () => {
-  console.log(`✅ Logged in as ${client.user.tag}`);
+/**
+ * ========= STARTUP =========
+ */
+client.once(Events.ClientReady, async () => {
+  console.log(`Logged in as ${client.user.tag}`);
 });
 
 (async () => {
-  await registerCommands();
   await dbInit();
+  await registerCommands();
+  console.log('Slash commands registered');
   await client.login(DISCORD_TOKEN);
 })();
