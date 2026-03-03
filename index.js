@@ -1,10 +1,18 @@
-import "dotenv/config";
-import {
+// index.js
+// Discord.js v14
+// Flow:
+// 1) /order -> shows dropdowns + Confirm/Cancel
+// 2) Confirm -> opens Shipping modal (LEGAL: showModal is the ONLY response)
+// 3) Modal submit -> posts full order + shipping to private staff channel (ORDERS_CHANNEL_ID)
+// 4) Customer gets ephemeral confirmation
+
+const {
   Client,
   GatewayIntentBits,
   Partials,
+  REST,
+  Routes,
   SlashCommandBuilder,
-  EmbedBuilder,
   ActionRowBuilder,
   StringSelectMenuBuilder,
   ButtonBuilder,
@@ -12,192 +20,215 @@ import {
   ModalBuilder,
   TextInputBuilder,
   TextInputStyle,
-} from "discord.js";
+  EmbedBuilder,
+} = require("discord.js");
 
-// =====================
-// ENV VARS (Railway)
-// =====================
-const TOKEN = process.env.BOT_TOKEN;
-const ORDERS_CHANNEL_ID = process.env.ORDERS_CHANNEL_ID; // private staff channel ID (e.g. #orders)
+const BOT_TOKEN = process.env.BOT_TOKEN;
+const ORDERS_CHANNEL_ID = process.env.ORDERS_CHANNEL_ID;
 
-if (!TOKEN) throw new Error("Missing BOT_TOKEN env var");
+// Optional (recommended): restrict where /order can be used
+const ORDER_CHANNEL_ID = process.env.ORDER_CHANNEL_ID; // your public #order-here channel id
+
+// Optional (recommended): auto-register slash commands
+const CLIENT_ID = process.env.CLIENT_ID; // your Discord application client id
+const GUILD_ID = process.env.GUILD_ID;   // your server id (guild id) for instant command updates
+
+if (!BOT_TOKEN) throw new Error("Missing BOT_TOKEN env var");
 if (!ORDERS_CHANNEL_ID) throw new Error("Missing ORDERS_CHANNEL_ID env var");
 
-// =====================
-// BASIC BOT SETUP
-// =====================
 const client = new Client({
   intents: [GatewayIntentBits.Guilds],
   partials: [Partials.Channel],
 });
 
-// =====================
-// SIMPLE CATALOG (EDIT THESE)
-// =====================
-const PRODUCTS = ["T-Shirt", "Hoodie", "Shorts"];
-const SIZES = ["XS", "S", "M", "L", "XL"];
-const COLOURS = ["Black", "White", "Grey"];
-const QUANTITIES = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"];
+// In-memory order state (good enough for your current setup)
+const ordersByUser = new Map(); // key: userId -> value: order object
 
-// =====================
-// ORDER STATE (in-memory)
-// NOTE: This resets if the bot restarts.
-// Good enough for your current setup.
-// =====================
-const pendingOrders = new Map(); // key: userId => { orderId, product, size, colour, quantity, createdAt }
-
-// Order ID generator
 function makeOrderId() {
-  const now = new Date();
-  const y = String(now.getFullYear()).slice(2);
-  const m = String(now.getMonth() + 1).padStart(2, "0");
-  const d = String(now.getDate()).padStart(2, "0");
-  const rand = Math.random().toString(36).slice(2, 6).toUpperCase();
-  return `ORD-${y}${m}${d}-${rand}`;
+  return `ORD-${Date.now().toString(36).toUpperCase()}-${Math.random()
+    .toString(36)
+    .slice(2, 6)
+    .toUpperCase()}`;
 }
 
-// Helper to build select menus
-function buildSelect(customId, placeholder, options) {
-  return new StringSelectMenuBuilder()
-    .setCustomId(customId)
-    .setPlaceholder(placeholder)
-    .addOptions(options.map((v) => ({ label: v, value: v })));
+function buildOrderComponents(userId) {
+  const state = ordersByUser.get(userId) || {};
+
+  const product = new StringSelectMenuBuilder()
+    .setCustomId(`sel_product:${userId}`)
+    .setPlaceholder(state.product ? `Product: ${state.product}` : "Select product")
+    .addOptions(
+      { label: "T-Shirt", value: "T-Shirt" },
+      { label: "Hoodie", value: "Hoodie" },
+      { label: "Shorts", value: "Shorts" }
+    );
+
+  const size = new StringSelectMenuBuilder()
+    .setCustomId(`sel_size:${userId}`)
+    .setPlaceholder(state.size ? `Size: ${state.size}` : "Select size")
+    .addOptions(
+      { label: "XS", value: "XS" },
+      { label: "S", value: "S" },
+      { label: "M", value: "M" },
+      { label: "L", value: "L" },
+      { label: "XL", value: "XL" }
+    );
+
+  const colour = new StringSelectMenuBuilder()
+    .setCustomId(`sel_colour:${userId}`)
+    .setPlaceholder(state.colour ? `Colour: ${state.colour}` : "Select colour")
+    .addOptions(
+      { label: "Black", value: "Black" },
+      { label: "White", value: "White" },
+      { label: "Navy", value: "Navy" }
+    );
+
+  const quantity = new StringSelectMenuBuilder()
+    .setCustomId(`sel_quantity:${userId}`)
+    .setPlaceholder(state.quantity ? `Quantity: ${state.quantity}` : "Select quantity")
+    .addOptions(
+      { label: "1", value: "1" },
+      { label: "2", value: "2" },
+      { label: "3", value: "3" },
+      { label: "4", value: "4" },
+      { label: "5", value: "5" }
+    );
+
+  const confirm = new ButtonBuilder()
+    .setCustomId(`btn_confirm:${userId}`)
+    .setLabel("Confirm Order")
+    .setStyle(ButtonStyle.Success);
+
+  const cancel = new ButtonBuilder()
+    .setCustomId(`btn_cancel:${userId}`)
+    .setLabel("Cancel")
+    .setStyle(ButtonStyle.Secondary);
+
+  return [
+    new ActionRowBuilder().addComponents(product),
+    new ActionRowBuilder().addComponents(size),
+    new ActionRowBuilder().addComponents(colour),
+    new ActionRowBuilder().addComponents(quantity),
+    new ActionRowBuilder().addComponents(confirm, cancel),
+  ];
 }
 
-// =====================
-// REGISTER /order COMMAND (per-guild quick method)
-// =====================
 async function registerCommands() {
-  const orderCmd = new SlashCommandBuilder()
-    .setName("order")
-    .setDescription("Start an order (product, size, colour, quantity).");
+  // If you don't want auto-registration, you can remove this whole function.
+  if (!CLIENT_ID || !GUILD_ID) return;
 
-  // Register to every guild the bot is currently in
-  for (const [, guild] of client.guilds.cache) {
-    await guild.commands.create(orderCmd);
-  }
+  const commands = [
+    new SlashCommandBuilder()
+      .setName("order")
+      .setDescription("Start an order")
+      .toJSON(),
+  ];
+
+  const rest = new REST({ version: "10" }).setToken(BOT_TOKEN);
+
+  await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), {
+    body: commands,
+  });
+
+  console.log("✅ Slash command registered to guild.");
 }
 
-// =====================
-// READY
-// =====================
 client.once("ready", async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
-
   try {
     await registerCommands();
-    console.log("✅ /order registered");
   } catch (e) {
-    console.error("❌ Failed to register /order:", e);
+    console.error("❌ Command registration failed:", e);
   }
 });
 
-// =====================
-// INTERACTIONS
-// =====================
 client.on("interactionCreate", async (interaction) => {
   try {
-    // -------------------------
-    // 1) /order slash command
-    // -------------------------
+    // ---------------------------
+    // Slash command: /order
+    // ---------------------------
     if (interaction.isChatInputCommand() && interaction.commandName === "order") {
-      const orderId = makeOrderId();
-
-      // Create a fresh pending order for this user
-      pendingOrders.set(interaction.user.id, {
-        orderId,
-        product: null,
-        size: null,
-        colour: null,
-        quantity: null,
-        createdAt: Date.now(),
-      });
-
-      const row1 = new ActionRowBuilder().addComponents(
-        buildSelect("sel_product", "Select product", PRODUCTS)
-      );
-      const row2 = new ActionRowBuilder().addComponents(
-        buildSelect("sel_size", "Select size", SIZES)
-      );
-      const row3 = new ActionRowBuilder().addComponents(
-        buildSelect("sel_colour", "Select colour", COLOURS)
-      );
-      const row4 = new ActionRowBuilder().addComponents(
-        buildSelect("sel_quantity", "Select quantity", QUANTITIES)
-      );
-
-      const row5 = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId("btn_confirm")
-          .setLabel("Confirm Order")
-          .setStyle(ButtonStyle.Success),
-        new ButtonBuilder()
-          .setCustomId("btn_cancel")
-          .setLabel("Cancel")
-          .setStyle(ButtonStyle.Secondary)
-      );
-
-      await interaction.reply({
-        content:
-          `Build your order using the dropdowns, then press **Confirm Order**.\n` +
-          `Order ID: **${orderId}**`,
-        components: [row1, row2, row3, row4, row5],
-        ephemeral: true,
-      });
-
-      return;
-    }
-
-    // -------------------------
-    // 2) Select menus
-    // -------------------------
-    if (interaction.isStringSelectMenu()) {
-      const state = pendingOrders.get(interaction.user.id);
-      if (!state) {
+      if (ORDER_CHANNEL_ID && interaction.channelId !== ORDER_CHANNEL_ID) {
         await interaction.reply({
-          content: "⚠️ No active order found. Run **/order** again.",
+          content: "⚠️ Please use /order in the order channel.",
           ephemeral: true,
         });
         return;
       }
 
-      const picked = interaction.values?.[0];
+      // Start/reset user's order state
+      ordersByUser.set(interaction.user.id, {
+        orderId: makeOrderId(),
+        product: null,
+        size: null,
+        colour: null,
+        quantity: null,
+      });
 
-      if (interaction.customId === "sel_product") state.product = picked;
-      if (interaction.customId === "sel_size") state.size = picked;
-      if (interaction.customId === "sel_colour") state.colour = picked;
-      if (interaction.customId === "sel_quantity") state.quantity = picked;
-
-      pendingOrders.set(interaction.user.id, state);
-
-      await interaction.deferUpdate(); // keep the ephemeral UI clean
+      await interaction.reply({
+        content: "Build your order using the dropdowns, then hit **Confirm Order**.",
+        components: buildOrderComponents(interaction.user.id),
+        ephemeral: true, // IMPORTANT: keeps the UI private to the customer
+      });
       return;
     }
 
-    // -------------------------
-    // 3) Confirm / Cancel buttons
-    // -------------------------
-    if (interaction.isButton()) {
-      const state = pendingOrders.get(interaction.user.id);
-
-      if (interaction.customId === "btn_cancel") {
-        pendingOrders.delete(interaction.user.id);
-        await interaction.update({
-          content: "❌ Order cancelled.",
-          components: [],
-        });
+    // ---------------------------
+    // Select menus
+    // ---------------------------
+    if (interaction.isStringSelectMenu()) {
+      const [kind, userId] = interaction.customId.split(":");
+      if (interaction.user.id !== userId) {
+        await interaction.reply({ content: "⚠️ This menu isn't for you.", ephemeral: true });
         return;
       }
 
-      if (interaction.customId === "btn_confirm") {
-        if (!state) {
-          await interaction.reply({
-            content: "⚠️ No active order found. Run **/order** again.",
-            ephemeral: true,
-          });
-          return;
-        }
+      const state = ordersByUser.get(userId);
+      if (!state) {
+        await interaction.reply({ content: "⚠️ No active order. Run /order again.", ephemeral: true });
+        return;
+      }
 
+      const choice = interaction.values?.[0];
+
+      if (kind === "sel_product") state.product = choice;
+      if (kind === "sel_size") state.size = choice;
+      if (kind === "sel_colour") state.colour = choice;
+      if (kind === "sel_quantity") state.quantity = choice;
+
+      ordersByUser.set(userId, state);
+
+      // Update the ephemeral message UI
+      await interaction.update({
+        content: "Build your order using the dropdowns, then hit **Confirm Order**.",
+        components: buildOrderComponents(userId),
+      });
+      return;
+    }
+
+    // ---------------------------
+    // Buttons
+    // ---------------------------
+    if (interaction.isButton()) {
+      const [btn, userId] = interaction.customId.split(":");
+      if (interaction.user.id !== userId) {
+        await interaction.reply({ content: "⚠️ This button isn't for you.", ephemeral: true });
+        return;
+      }
+
+      const state = ordersByUser.get(userId);
+      if (!state) {
+        await interaction.reply({ content: "⚠️ No active order. Run /order again.", ephemeral: true });
+        return;
+      }
+
+      if (btn === "btn_cancel") {
+        ordersByUser.delete(userId);
+        await interaction.reply({ content: "✅ Order cancelled.", ephemeral: true });
+        return;
+      }
+
+      if (btn === "btn_confirm") {
         const missing = [];
         if (!state.product) missing.push("product");
         if (!state.size) missing.push("size");
@@ -206,38 +237,15 @@ client.on("interactionCreate", async (interaction) => {
 
         if (missing.length) {
           await interaction.reply({
-            content: `⚠️ Please select: **${missing.join(", ")}** before confirming.`,
+            content: `⚠️ Please select: ${missing.join(", ")}`,
             ephemeral: true,
           });
           return;
         }
 
-        // 3a) Post order to STAFF channel
-        const staffChannel = await client.channels.fetch(ORDERS_CHANNEL_ID);
-
-        const orderEmbed = new EmbedBuilder()
-          .setTitle("🛒 New Order")
-          .addFields(
-            { name: "Order ID", value: `**${state.orderId}**`, inline: false },
-            { name: "User", value: `${interaction.user} (${interaction.user.id})`, inline: false },
-            { name: "Product", value: state.product, inline: true },
-            { name: "Size", value: state.size, inline: true },
-            { name: "Colour", value: state.colour, inline: true },
-            { name: "Quantity", value: state.quantity, inline: true }
-          )
-          .setTimestamp();
-
-        await staffChannel.send({ embeds: [orderEmbed] });
-
-        // 3b) Confirm to customer (normal message)
-        await interaction.reply({
-          content: `✅ Order submitted! Now please enter your shipping details.`,
-          ephemeral: true,
-        });
-
-        // 3c) Open shipping modal (pop-up)
+        // ✅ LEGAL: showModal is the ONE initial response here (no reply/defer beforehand)
         const modal = new ModalBuilder()
-          .setCustomId(`shipping_modal:${state.orderId}`)
+          .setCustomId(`shipping_modal:${userId}:${state.orderId}`)
           .setTitle("Shipping Details");
 
         const fullName = new TextInputBuilder()
@@ -264,89 +272,94 @@ client.on("interactionCreate", async (interaction) => {
           .setStyle(TextInputStyle.Short)
           .setRequired(true);
 
-        const country = new TextInputBuilder()
-          .setCustomId("ship_country")
-          .setLabel("Country")
-          .setStyle(TextInputStyle.Short)
-          .setRequired(true);
-
         const phone = new TextInputBuilder()
           .setCustomId("ship_phone")
-          .setLabel("Phone (optional)")
+          .setLabel("Phone number")
           .setStyle(TextInputStyle.Short)
-          .setRequired(false);
+          .setRequired(true);
 
         modal.addComponents(
           new ActionRowBuilder().addComponents(fullName),
           new ActionRowBuilder().addComponents(address1),
           new ActionRowBuilder().addComponents(city),
           new ActionRowBuilder().addComponents(postcode),
-          new ActionRowBuilder().addComponents(country)
+          new ActionRowBuilder().addComponents(phone)
         );
 
-        // phone in its own row (modals allow up to 5 rows)
-        modal.addComponents(new ActionRowBuilder().addComponents(phone));
-
-        // IMPORTANT: showModal must be its own response
         await interaction.showModal(modal);
-
-        // Keep state (so staff can see order first; shipping comes right after)
-        // We can delete now or keep briefly. We'll keep it 10 minutes then auto-clean.
-        setTimeout(() => {
-          const s = pendingOrders.get(interaction.user.id);
-          if (s && s.orderId === state.orderId) pendingOrders.delete(interaction.user.id);
-        }, 10 * 60 * 1000);
-
         return;
       }
     }
 
-    // -------------------------
-    // 4) Shipping modal submit
-    // -------------------------
-    if (interaction.isModalSubmit() && interaction.customId.startsWith("shipping_modal:")) {
-      const orderId = interaction.customId.split(":")[1] || "UNKNOWN";
+    // ---------------------------
+    // Modal submit (shipping)
+    // ---------------------------
+    if (interaction.isModalSubmit()) {
+      const [prefix, userId, orderId] = interaction.customId.split(":");
+      if (prefix !== "shipping_modal") return;
 
-      const shipName = interaction.fields.getTextInputValue("ship_fullname");
+      if (interaction.user.id !== userId) {
+        await interaction.reply({ content: "⚠️ This modal isn't for you.", ephemeral: true });
+        return;
+      }
+
+      const state = ordersByUser.get(userId);
+      if (!state || state.orderId !== orderId) {
+        await interaction.reply({
+          content: "⚠️ Order session expired. Please run /order again.",
+          ephemeral: true,
+        });
+        return;
+      }
+
+      const shipFullName = interaction.fields.getTextInputValue("ship_fullname");
       const shipAddress1 = interaction.fields.getTextInputValue("ship_address1");
       const shipCity = interaction.fields.getTextInputValue("ship_city");
       const shipPostcode = interaction.fields.getTextInputValue("ship_postcode");
-      const shipCountry = interaction.fields.getTextInputValue("ship_country");
-      const shipPhone = interaction.fields.getTextInputValue("ship_phone") || "—";
+      const shipPhone = interaction.fields.getTextInputValue("ship_phone");
 
+      // Post to PRIVATE staff channel only
       const staffChannel = await client.channels.fetch(ORDERS_CHANNEL_ID);
 
-      const shipEmbed = new EmbedBuilder()
-        .setTitle("📦 Shipping Details")
+      const embed = new EmbedBuilder()
+        .setTitle("🛒 New Order (with Shipping)")
         .addFields(
-          { name: "Order ID", value: `**${orderId}**`, inline: false },
-          { name: "User", value: `${interaction.user} (${interaction.user.id})`, inline: false },
-          { name: "Full name", value: shipName, inline: false },
-          { name: "Address line 1", value: shipAddress1, inline: false },
+          { name: "Order ID", value: `**${state.orderId}**` },
+          { name: "Customer", value: `${interaction.user} (${interaction.user.id})` },
+
+          { name: "Product", value: state.product, inline: true },
+          { name: "Size", value: state.size, inline: true },
+          { name: "Colour", value: state.colour, inline: true },
+          { name: "Quantity", value: state.quantity, inline: true },
+
+          { name: "Full name", value: shipFullName },
+          { name: "Address", value: shipAddress1 },
           { name: "City", value: shipCity, inline: true },
           { name: "Postcode", value: shipPostcode, inline: true },
-          { name: "Country", value: shipCountry, inline: true },
-          { name: "Phone", value: shipPhone, inline: false }
+          { name: "Phone", value: shipPhone, inline: true }
         )
         .setTimestamp();
 
-      await staffChannel.send({ embeds: [shipEmbed] });
+      await staffChannel.send({ embeds: [embed] });
 
+      // Customer confirmation (private)
       await interaction.reply({
-        content: "✅ Shipping details submitted. Thank you!",
+        content: "✅ Order submitted! A team member will follow up with payment.",
         ephemeral: true,
       });
 
+      // Clear state
+      ordersByUser.delete(userId);
       return;
     }
   } catch (err) {
     console.error("❌ interactionCreate error:", err);
 
-    // Try to respond safely if possible
-    if (interaction.isRepliable()) {
+    // Try to safely reply if possible (avoid crashing silently)
+    if (!interaction.deferred && !interaction.replied) {
       try {
         await interaction.reply({
-          content: "⚠️ Something went wrong. Please try again.",
+          content: "⚠️ Something went wrong. Please try /order again.",
           ephemeral: true,
         });
       } catch {}
@@ -354,7 +367,4 @@ client.on("interactionCreate", async (interaction) => {
   }
 });
 
-// =====================
-// LOGIN
-// =====================
-client.login(TOKEN);
+client.login(BOT_TOKEN);
