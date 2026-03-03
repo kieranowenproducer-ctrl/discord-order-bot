@@ -13,15 +13,16 @@ import {
 const TOKEN = process.env.BOT_TOKEN;
 const ORDERS_CHANNEL_ID = process.env.ORDERS_CHANNEL_ID;
 
-// ---- Safety checks ----
 if (!TOKEN) throw new Error("Missing BOT_TOKEN env var");
 if (!ORDERS_CHANNEL_ID) throw new Error("Missing ORDERS_CHANNEL_ID env var");
 
-// ---- Your shop options (edit these safely) ----
+// EDIT THESE OPTIONS AS YOU LIKE
 const PRODUCTS = ["T-Shirt", "Hoodie", "Cap"];
 const SIZES = ["XS", "S", "M", "L", "XL"];
 const COLOURS = ["White", "Black", "Grey"];
 const QUANTITIES = ["1", "2", "3", "4", "5"];
+
+const orders = new Map(); // in-memory state per user
 
 function makeSelect(customId, placeholder, items) {
   return new StringSelectMenuBuilder()
@@ -30,26 +31,22 @@ function makeSelect(customId, placeholder, items) {
     .addOptions(items.map((x) => ({ label: x, value: x })));
 }
 
-function buildOrderKey(userId) {
+function keyFor(userId) {
   return `order:${userId}`;
 }
-
-// Simple in-memory store (resets if Railway restarts)
-// Good enough for now because the user usually completes in one go.
-const orders = new Map();
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds],
 });
 
 client.once("ready", async () => {
-  console.log(`✅ Logged in as ${client.user.tag}`);
+  console.log(`✅ Bot ready: ${client.user.tag}`);
+  console.log(`✅ Using ORDERS_CHANNEL_ID=${ORDERS_CHANNEL_ID}`);
 
-  // Register slash command(s)
   const commands = [
     new SlashCommandBuilder()
       .setName("order")
-      .setDescription("Build an order using dropdowns"),
+      .setDescription("Create a new order"),
   ].map((c) => c.toJSON());
 
   const rest = new REST({ version: "10" }).setToken(TOKEN);
@@ -59,16 +56,20 @@ client.once("ready", async () => {
     await rest.put(Routes.applicationGuildCommands(client.user.id, guild.id), {
       body: commands,
     });
-    console.log(`✅ Commands registered for guild: ${guild.name}`);
+    console.log(`✅ Registered /order for guild: ${guild.name}`);
   }
 });
 
 client.on("interactionCreate", async (interaction) => {
   try {
-    // /order command
+    // /order
     if (interaction.isChatInputCommand() && interaction.commandName === "order") {
-      const key = buildOrderKey(interaction.user.id);
-      orders.set(key, { product: null, size: null, colour: null, quantity: null });
+      orders.set(keyFor(interaction.user.id), {
+        product: null,
+        size: null,
+        colour: null,
+        quantity: null,
+      });
 
       const row1 = new ActionRowBuilder().addComponents(
         makeSelect("select_product", "Select product", PRODUCTS)
@@ -83,7 +84,7 @@ client.on("interactionCreate", async (interaction) => {
         makeSelect("select_quantity", "Select quantity", QUANTITIES)
       );
 
-      const row5 = new ActionRowBuilder().addComponents(
+      const buttons = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId("confirm_order")
           .setLabel("Confirm Order")
@@ -95,71 +96,80 @@ client.on("interactionCreate", async (interaction) => {
       );
 
       await interaction.reply({
-        content: "Build your order using the dropdowns, then hit **Confirm Order**.",
-        components: [row1, row2, row3, row4, row5],
+        content:
+          "Build your order using the dropdowns, then click **Confirm Order**.\n\n" +
+          "✅ **IMPORTANT:** Orders are sent privately to the shop owner.",
+        components: [row1, row2, row3, row4, buttons],
         ephemeral: true,
       });
       return;
     }
 
-    // Dropdown selections
+    // dropdowns
     if (interaction.isStringSelectMenu()) {
-      const key = buildOrderKey(interaction.user.id);
-      const state = orders.get(key) || { product: null, size: null, colour: null, quantity: null };
+      const state = orders.get(keyFor(interaction.user.id)) || {
+        product: null,
+        size: null,
+        colour: null,
+        quantity: null,
+      };
 
       if (interaction.customId === "select_product") state.product = interaction.values[0];
       if (interaction.customId === "select_size") state.size = interaction.values[0];
       if (interaction.customId === "select_colour") state.colour = interaction.values[0];
       if (interaction.customId === "select_quantity") state.quantity = interaction.values[0];
 
-      orders.set(key, state);
+      orders.set(keyFor(interaction.user.id), state);
 
-      // Update the ephemeral message with a “current selection” preview
       const preview =
-        `**Current Selection**\n` +
+        `**Current selection**\n` +
         `Product: ${state.product ?? "—"}\n` +
         `Size: ${state.size ?? "—"}\n` +
         `Colour: ${state.colour ?? "—"}\n` +
         `Quantity: ${state.quantity ?? "—"}`;
 
       await interaction.update({
-        content: `Build your order using the dropdowns, then hit **Confirm Order**.\n\n${preview}`,
+        content:
+          "Build your order using the dropdowns, then click **Confirm Order**.\n\n" +
+          preview,
         components: interaction.message.components,
       });
       return;
     }
 
-    // Confirm / Cancel buttons
+    // buttons
     if (interaction.isButton()) {
-      const key = buildOrderKey(interaction.user.id);
-      const state = orders.get(key);
+      const state = orders.get(keyFor(interaction.user.id));
 
       if (interaction.customId === "cancel_order") {
-        orders.delete(key);
-        await interaction.update({
-          content: "❌ Order cancelled.",
-          components: [],
-        });
+        orders.delete(keyFor(interaction.user.id));
+        await interaction.update({ content: "❌ Order cancelled.", components: [] });
         return;
       }
 
       if (interaction.customId === "confirm_order") {
         if (!state?.product || !state?.size || !state?.colour || !state?.quantity) {
           await interaction.reply({
-            content: "⚠️ Please choose **product, size, colour, and quantity** before confirming.",
+            content: "⚠️ Please select product, size, colour, and quantity before confirming.",
             ephemeral: true,
           });
           return;
         }
 
-        // Send to private #orders channel (owner view)
+        console.log(
+          `📦 Confirm clicked by ${interaction.user.tag}: ${JSON.stringify(state)}`
+        );
+
+        // Fetch private orders channel and send the order there
         const ordersChannel = await client.channels.fetch(ORDERS_CHANNEL_ID);
 
         if (!ordersChannel || !ordersChannel.isTextBased()) {
-          throw new Error("ORDERS_CHANNEL_ID is not a text channel or bot cannot access it.");
+          throw new Error(
+            "ORDERS_CHANNEL_ID is invalid or bot cannot access the channel."
+          );
         }
 
-        const orderText =
+        const orderMsg =
           `📦 **New Order**\n` +
           `User: <@${interaction.user.id}>\n` +
           `Product: **${state.product}**\n` +
@@ -167,30 +177,27 @@ client.on("interactionCreate", async (interaction) => {
           `Colour: **${state.colour}**\n` +
           `Quantity: **${state.quantity}**`;
 
-        await ordersChannel.send({ content: orderText });
+        await ordersChannel.send({ content: orderMsg });
+        console.log(`✅ Sent order to private channel ${ORDERS_CHANNEL_ID}`);
 
-        // Clear stored state
-        orders.delete(key);
+        orders.delete(keyFor(interaction.user.id));
 
-        // Update the ephemeral message (no public spam)
+        // Update ephemeral UI only
         await interaction.update({
           content: "✅ Order submitted! A team member will follow up with payment.",
           components: [],
         });
-
         return;
       }
     }
   } catch (err) {
-    console.error(err);
+    console.error("❌ interaction error:", err);
 
-    // Try to respond safely no matter what interaction type it was
+    const msg =
+      "❌ Something went wrong.\n" +
+      "Shop owner: check Railway Logs — usually wrong channel ID or missing permissions.";
+
     if (interaction.isRepliable()) {
-      const msg =
-        "❌ Something went wrong while processing your order.\n" +
-        "If you're the owner: check Railway Logs (likely missing permissions or channel ID).";
-
-      // Avoid double-respond errors
       if (interaction.deferred || interaction.replied) {
         await interaction.followUp({ content: msg, ephemeral: true });
       } else {
