@@ -13,44 +13,16 @@ import {
 const TOKEN = process.env.BOT_TOKEN;
 const ORDERS_CHANNEL_ID = process.env.ORDERS_CHANNEL_ID;
 
+// ---- Safety checks ----
 if (!TOKEN) throw new Error("Missing BOT_TOKEN env var");
 if (!ORDERS_CHANNEL_ID) throw new Error("Missing ORDERS_CHANNEL_ID env var");
 
-// ✅ Edit these lists anytime
-const PRODUCTS = ["Hoodie", "T-Shirt", "Joggers", "Cap"];
+// ---- Your shop options (edit these safely) ----
+const PRODUCTS = ["T-Shirt", "Hoodie", "Cap"];
 const SIZES = ["XS", "S", "M", "L", "XL"];
-const COLOURS = ["Black", "White", "Navy", "Grey"];
+const COLOURS = ["White", "Black", "Grey"];
 const QUANTITIES = ["1", "2", "3", "4", "5"];
 
-const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMembers,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
-  ],
-});
-
-// Register /order command
-async function registerCommands() {
-  const command = new SlashCommandBuilder()
-    .setName("order")
-    .setDescription("Start an order");
-
-  const rest = new REST({ version: "10" }).setToken(TOKEN);
-
-  // Register globally (can take a while) OR per-guild (instant).
-  // We'll do per-guild for speed: register on each guild the bot is in.
-  for (const guild of client.guilds.cache.values()) {
-    await rest.put(Routes.applicationGuildCommands(client.user.id, guild.id), {
-      body: [command.toJSON()],
-    });
-  }
-
-  console.log("✅ /order command registered");
-}
-
-// Helper: build dropdown
 function makeSelect(customId, placeholder, items) {
   return new StringSelectMenuBuilder()
     .setCustomId(customId)
@@ -58,42 +30,66 @@ function makeSelect(customId, placeholder, items) {
     .addOptions(items.map((x) => ({ label: x, value: x })));
 }
 
+function buildOrderKey(userId) {
+  return `order:${userId}`;
+}
+
+// Simple in-memory store (resets if Railway restarts)
+// Good enough for now because the user usually completes in one go.
+const orders = new Map();
+
+const client = new Client({
+  intents: [GatewayIntentBits.Guilds],
+});
+
 client.once("ready", async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 
-  // Make sure command registration sees guilds
-  await registerCommands();
-});
+  // Register slash command(s)
+  const commands = [
+    new SlashCommandBuilder()
+      .setName("order")
+      .setDescription("Build an order using dropdowns"),
+  ].map((c) => c.toJSON());
 
-// In-memory “cart” for each user (simple + effective for starters)
-const userDraft = new Map(); // key: userId => { product,size,colour,qty }
+  const rest = new REST({ version: "10" }).setToken(TOKEN);
+
+  // Register per-guild for instant updates
+  for (const guild of client.guilds.cache.values()) {
+    await rest.put(Routes.applicationGuildCommands(client.user.id, guild.id), {
+      body: commands,
+    });
+    console.log(`✅ Commands registered for guild: ${guild.name}`);
+  }
+});
 
 client.on("interactionCreate", async (interaction) => {
   try {
-    // /order
+    // /order command
     if (interaction.isChatInputCommand() && interaction.commandName === "order") {
-      userDraft.set(interaction.user.id, {});
+      const key = buildOrderKey(interaction.user.id);
+      orders.set(key, { product: null, size: null, colour: null, quantity: null });
 
       const row1 = new ActionRowBuilder().addComponents(
-        makeSelect("product", "Select product", PRODUCTS)
+        makeSelect("select_product", "Select product", PRODUCTS)
       );
       const row2 = new ActionRowBuilder().addComponents(
-        makeSelect("size", "Select size", SIZES)
+        makeSelect("select_size", "Select size", SIZES)
       );
       const row3 = new ActionRowBuilder().addComponents(
-        makeSelect("colour", "Select colour", COLOURS)
+        makeSelect("select_colour", "Select colour", COLOURS)
       );
       const row4 = new ActionRowBuilder().addComponents(
-        makeSelect("qty", "Select quantity", QUANTITIES)
+        makeSelect("select_quantity", "Select quantity", QUANTITIES)
       );
 
       const row5 = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
-          .setCustomId("confirm")
+          .setCustomId("confirm_order")
           .setLabel("Confirm Order")
           .setStyle(ButtonStyle.Success),
         new ButtonBuilder()
-          .setCustomId("cancel")
+          .setCustomId("cancel_order")
           .setLabel("Cancel")
           .setStyle(ButtonStyle.Secondary)
       );
@@ -101,43 +97,45 @@ client.on("interactionCreate", async (interaction) => {
       await interaction.reply({
         content: "Build your order using the dropdowns, then hit **Confirm Order**.",
         components: [row1, row2, row3, row4, row5],
-        ephemeral: true, // only the user sees it
+        ephemeral: true,
       });
       return;
     }
 
     // Dropdown selections
     if (interaction.isStringSelectMenu()) {
-      const draft = userDraft.get(interaction.user.id) || {};
-      const picked = interaction.values?.[0];
+      const key = buildOrderKey(interaction.user.id);
+      const state = orders.get(key) || { product: null, size: null, colour: null, quantity: null };
 
-      if (interaction.customId === "product") draft.product = picked;
-      if (interaction.customId === "size") draft.size = picked;
-      if (interaction.customId === "colour") draft.colour = picked;
-      if (interaction.customId === "qty") draft.qty = picked;
+      if (interaction.customId === "select_product") state.product = interaction.values[0];
+      if (interaction.customId === "select_size") state.size = interaction.values[0];
+      if (interaction.customId === "select_colour") state.colour = interaction.values[0];
+      if (interaction.customId === "select_quantity") state.quantity = interaction.values[0];
 
-      userDraft.set(interaction.user.id, draft);
+      orders.set(key, state);
 
-      const summary =
-        `**Current order:**\n` +
-        `• Product: ${draft.product ?? "—"}\n` +
-        `• Size: ${draft.size ?? "—"}\n` +
-        `• Colour: ${draft.colour ?? "—"}\n` +
-        `• Qty: ${draft.qty ?? "—"}`;
+      // Update the ephemeral message with a “current selection” preview
+      const preview =
+        `**Current Selection**\n` +
+        `Product: ${state.product ?? "—"}\n` +
+        `Size: ${state.size ?? "—"}\n` +
+        `Colour: ${state.colour ?? "—"}\n` +
+        `Quantity: ${state.quantity ?? "—"}`;
 
       await interaction.update({
-        content:
-          "Build your order using the dropdowns, then hit **Confirm Order**.\n\n" + summary,
+        content: `Build your order using the dropdowns, then hit **Confirm Order**.\n\n${preview}`,
         components: interaction.message.components,
       });
       return;
     }
 
-    // Buttons
+    // Confirm / Cancel buttons
     if (interaction.isButton()) {
-      const draft = userDraft.get(interaction.user.id) || {};
-      if (interaction.customId === "cancel") {
-        userDraft.delete(interaction.user.id);
+      const key = buildOrderKey(interaction.user.id);
+      const state = orders.get(key);
+
+      if (interaction.customId === "cancel_order") {
+        orders.delete(key);
         await interaction.update({
           content: "❌ Order cancelled.",
           components: [],
@@ -145,43 +143,59 @@ client.on("interactionCreate", async (interaction) => {
         return;
       }
 
-      if (interaction.customId === "confirm") {
-        const missing = ["product", "size", "colour", "qty"].filter((k) => !draft[k]);
-        if (missing.length) {
+      if (interaction.customId === "confirm_order") {
+        if (!state?.product || !state?.size || !state?.colour || !state?.quantity) {
           await interaction.reply({
-            content: `Please select: **${missing.join(", ")}** before confirming.`,
+            content: "⚠️ Please choose **product, size, colour, and quantity** before confirming.",
             ephemeral: true,
           });
           return;
         }
 
+        // Send to private #orders channel (owner view)
         const ordersChannel = await client.channels.fetch(ORDERS_CHANNEL_ID);
 
-        await ordersChannel.send(
-          `🛒 **New Order**\n` +
-            `User: <@${interaction.user.id}>\n` +
-            `Product: **${draft.product}**\n` +
-            `Size: **${draft.size}**\n` +
-            `Colour: **${draft.colour}**\n` +
-            `Quantity: **${draft.qty}**`
-        );
+        if (!ordersChannel || !ordersChannel.isTextBased()) {
+          throw new Error("ORDERS_CHANNEL_ID is not a text channel or bot cannot access it.");
+        }
 
-        userDraft.delete(interaction.user.id);
+        const orderText =
+          `📦 **New Order**\n` +
+          `User: <@${interaction.user.id}>\n` +
+          `Product: **${state.product}**\n` +
+          `Size: **${state.size}**\n` +
+          `Colour: **${state.colour}**\n` +
+          `Quantity: **${state.quantity}**`;
 
+        await ordersChannel.send({ content: orderText });
+
+        // Clear stored state
+        orders.delete(key);
+
+        // Update the ephemeral message (no public spam)
         await interaction.update({
           content: "✅ Order submitted! A team member will follow up with payment.",
           components: [],
         });
+
         return;
       }
     }
   } catch (err) {
     console.error(err);
+
+    // Try to respond safely no matter what interaction type it was
     if (interaction.isRepliable()) {
-      await interaction.reply({
-        content: "Something went wrong. Check bot logs and try again.",
-        ephemeral: true,
-      }).catch(() => {});
+      const msg =
+        "❌ Something went wrong while processing your order.\n" +
+        "If you're the owner: check Railway Logs (likely missing permissions or channel ID).";
+
+      // Avoid double-respond errors
+      if (interaction.deferred || interaction.replied) {
+        await interaction.followUp({ content: msg, ephemeral: true });
+      } else {
+        await interaction.reply({ content: msg, ephemeral: true });
+      }
     }
   }
 });
