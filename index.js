@@ -6,9 +6,13 @@
 // CHANGE: Bank transfer details shown in receipt channel instead of staff adding a payment link
 // NOTE: "Mark as paid" button is kept, and the old paylink code is kept (just not surfaced in UI)
 
-// ✅ CHANGE IN THIS VERSION:
-// Removed the two unnecessary “Standard” dropdowns by removing the size + colour selection steps.
-// Flow is now: Category -> Item -> Quantity (1–5 / Other)
+// ✅ FIX IN THIS VERSION:
+// /setupshop now uses deferReply() + editReply() so Discord never times out with
+// "The application did not respond".
+
+// ✅ FLOW:
+// Category -> Item -> Quantity (1–5 / Other)
+// (No extra Standard dropdowns)
 
 const {
   Client,
@@ -302,49 +306,49 @@ async function getUserShippingProfile(userId) {
 
 const CATALOG = {
   "⭐ Best Sellers (Pens)": [
-    { sku: "A01", name: "Item A (30mg) — Pen", price_pence: 14000, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
-    { sku: "A02", name: "Item B (40mg) — Pen [DUE IN]", price_pence: 16000, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
-    { sku: "A03", name: "Item C (40mg) — Pen", price_pence: 11000, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
+    { sku: "A01", name: "Item A (30mg) — Pen", price_pence: 14000 },
+    { sku: "A02", name: "Item B (40mg) — Pen [DUE IN]", price_pence: 16000 },
+    { sku: "A03", name: "Item C (40mg) — Pen", price_pence: 11000 },
   ],
   "💉 Premium Pens": [
-    { sku: "B01", name: "Item D (1000mg)", price_pence: 13000, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
-    { sku: "B02", name: "Item E (20mg / 20mg) [DUE IN]", price_pence: 11500, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
-    { sku: "B03", name: "Item F (70mg) [DUE IN]", price_pence: 10000, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
+    { sku: "B01", name: "Item D (1000mg)", price_pence: 13000 },
+    { sku: "B02", name: "Item E (20mg / 20mg) [DUE IN]", price_pence: 11500 },
+    { sku: "B03", name: "Item F (70mg) [DUE IN]", price_pence: 10000 },
   ],
   "🧬 Peptides (Vials)": [
-    { sku: "C01", name: "Item G (30mg)", price_pence: 8500, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
-    { sku: "C02", name: "Item H (40mg) [DUE IN]", price_pence: 7500, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
-    { sku: "C03", name: "Item I (10mg)", price_pence: 4000, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
-    { sku: "C04", name: "Item J (40mg) [DUE IN]", price_pence: 4500, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
-    { sku: "C05", name: "Item K (10mg)", price_pence: 2000, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
-    { sku: "C06", name: "Item L (10mg)", price_pence: 1500, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
+    { sku: "C01", name: "Item G (30mg)", price_pence: 8500 },
+    { sku: "C02", name: "Item H (40mg) [DUE IN]", price_pence: 7500 },
+    { sku: "C03", name: "Item I (10mg)", price_pence: 4000 },
+    { sku: "C04", name: "Item J (40mg) [DUE IN]", price_pence: 4500 },
+    { sku: "C05", name: "Item K (10mg)", price_pence: 2000 },
+    { sku: "C06", name: "Item L (10mg)", price_pence: 1500 },
   ],
   "👑 Injectables (Oils)": [
-    { sku: "D01", name: "Item M (400mg)", price_pence: 3500, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
-    { sku: "D02", name: "Item N (300mg / 250mg)", price_pence: 3000, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
-    { sku: "D03", name: "Item O (300mg)", price_pence: 3000, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
-    { sku: "D04", name: "Item P (330mg / 150mg)", price_pence: 3500, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
-    { sku: "D05", name: "Item Q (Blend 200)", price_pence: 3500, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
-    { sku: "D06", name: "Item R (100iu)", price_pence: 12000, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
+    { sku: "D01", name: "Item M (400mg)", price_pence: 3500 },
+    { sku: "D02", name: "Item N (300mg / 250mg)", price_pence: 3000 },
+    { sku: "D03", name: "Item O (300mg)", price_pence: 3000 },
+    { sku: "D04", name: "Item P (330mg / 150mg)", price_pence: 3500 },
+    { sku: "D05", name: "Item Q (Blend 200)", price_pence: 3500 },
+    { sku: "D06", name: "Item R (100iu)", price_pence: 12000 },
   ],
   "💊 Health & Performance": [
-    { sku: "E01", name: "Item S (100 tabs)", price_pence: 3500, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
-    { sku: "E02", name: "Item T (Individual strip)", price_pence: 1000, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
-    { sku: "E03", name: "Item U (100 tabs)", price_pence: 3500, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
-    { sku: "E04", name: "Item V (Jelly)", price_pence: 1000, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
-    { sku: "E05", name: "Item W (5000iu)", price_pence: 2500, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
-    { sku: "E06", name: "Item X (150iu)", price_pence: 3000, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
-    { sku: "E07", name: "Item Y (PCT pack)", price_pence: 2500, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
-    { sku: "E08", name: "Item Z (20mg / 100 tabs)", price_pence: 4500, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
-    { sku: "E09", name: "Item AA (B12 injections 10x1)", price_pence: 2000, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
+    { sku: "E01", name: "Item S (100 tabs)", price_pence: 3500 },
+    { sku: "E02", name: "Item T (Individual strip)", price_pence: 1000 },
+    { sku: "E03", name: "Item U (100 tabs)", price_pence: 3500 },
+    { sku: "E04", name: "Item V (Jelly)", price_pence: 1000 },
+    { sku: "E05", name: "Item W (5000iu)", price_pence: 2500 },
+    { sku: "E06", name: "Item X (150iu)", price_pence: 3000 },
+    { sku: "E07", name: "Item Y (PCT pack)", price_pence: 2500 },
+    { sku: "E08", name: "Item Z (20mg / 100 tabs)", price_pence: 4500 },
+    { sku: "E09", name: "Item AA (B12 injections 10x1)", price_pence: 2000 },
   ],
   "💤 Pain & Sleep": [
-    { sku: "F01", name: "Item AB (10mg / 140 tabs)", price_pence: 4500, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
-    { sku: "F02", name: "Item AB (Bundle: 5 for £200)", price_pence: 20000, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
-    { sku: "F03", name: "Item AC (10mg) — 1 sleeve", price_pence: 1000, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
-    { sku: "F04", name: "Item AC (10mg) — 3 sleeves", price_pence: 2500, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
-    { sku: "F05", name: "Item AD (300mg / 150 tabs)", price_pence: 4500, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
-    { sku: "F06", name: "Item AE (50mg / 100 tabs)", price_pence: 4500, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
+    { sku: "F01", name: "Item AB (10mg / 140 tabs)", price_pence: 4500 },
+    { sku: "F02", name: "Item AB (Bundle: 5 for £200)", price_pence: 20000 },
+    { sku: "F03", name: "Item AC (10mg) — 1 sleeve", price_pence: 1000 },
+    { sku: "F04", name: "Item AC (10mg) — 3 sleeves", price_pence: 2500 },
+    { sku: "F05", name: "Item AD (300mg / 150 tabs)", price_pence: 4500 },
+    { sku: "F06", name: "Item AE (50mg / 100 tabs)", price_pence: 4500 },
   ],
 };
 
@@ -434,10 +438,7 @@ function qtyButtonsComponents(category, sku) {
   );
 
   const row2 = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`add_qty_other:${category}:${sku}`)
-      .setLabel("Other…")
-      .setStyle(ButtonStyle.Primary)
+    new ButtonBuilder().setCustomId(`add_qty_other:${category}:${sku}`).setLabel("Other…").setStyle(ButtonStyle.Primary)
   );
 
   return [row1, row2];
@@ -609,6 +610,8 @@ function staffReceiptControls(orderId) {
 /* ------------------------------ INTERACTIONS ----------------------------- */
 
 client.on("interactionCreate", async (interaction) => {
+  let deferred = false;
+
   try {
     if (interaction.isChatInputCommand()) {
       if (interaction.commandName === "ping") {
@@ -616,6 +619,10 @@ client.on("interactionCreate", async (interaction) => {
       }
 
       if (interaction.commandName === "setupshop") {
+        // ✅ IMPORTANT: prevent "application did not respond"
+        await interaction.deferReply({ ephemeral: true });
+        deferred = true;
+
         const menuChannel = await client.channels.fetch(MENU_CHANNEL_ID);
 
         const content =
@@ -631,7 +638,8 @@ client.on("interactionCreate", async (interaction) => {
           `Once submitted, you'll receive a **private receipt channel** with **bank transfer details** to pay.`;
 
         await menuChannel.send({ content, components: menuMessageComponents() });
-        return interaction.reply({ content: "✅ Shop menu message posted/refreshed in the menu channel.", ephemeral: true });
+
+        return interaction.editReply("✅ Shop menu message posted/refreshed in the menu channel.");
       }
     }
 
@@ -661,7 +669,6 @@ client.on("interactionCreate", async (interaction) => {
         });
 
         const cart = await getCartSummary(interaction.user.id);
-
         const profile = await getUserShippingProfile(interaction.user.id);
         const shippingPence = getShippingPenceForCountry(profile?.country);
 
@@ -812,7 +819,6 @@ client.on("interactionCreate", async (interaction) => {
         const [, category] = customId.split(":");
         const sku = interaction.values[0];
 
-        // ✅ DIRECTLY GO TO QUANTITY (removes the two unnecessary dropdowns)
         return interaction.reply({
           content: "Selected item — how many?",
           components: qtyButtonsComponents(category, sku),
@@ -917,12 +923,20 @@ client.on("interactionCreate", async (interaction) => {
     }
   } catch (err) {
     console.error(err);
-    if (interaction.isRepliable()) {
-      try {
-        await interaction.reply({ content: `❌ Error: ${err.message}`, ephemeral: true });
-      } catch {
-        // ignore
+
+    if (!interaction.isRepliable()) return;
+
+    try {
+      const msg = `❌ Error: ${err.message || "Unknown error"}`;
+      if (deferred || interaction.deferred) {
+        await interaction.editReply(msg);
+      } else if (interaction.replied) {
+        await interaction.followUp({ content: msg, ephemeral: true });
+      } else {
+        await interaction.reply({ content: msg, ephemeral: true });
       }
+    } catch {
+      // ignore
     }
   }
 });
