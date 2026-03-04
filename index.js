@@ -2,7 +2,9 @@
 // Discord Shop Bot (discord.js v14 + Postgres)
 // - No cart_json usage (fixes your earlier issue)
 // - Modal limited to 5 inputs (fixes Invalid Form Body error)
-// - Creates private receipt channels for each order, staff can add payment link
+// - Creates private receipt channels for each order
+// CHANGE: Bank transfer details shown in receipt channel instead of staff adding a payment link
+// NOTE: "Mark as paid" button is kept, and the old paylink code is kept (just not surfaced in UI)
 
 const {
   Client,
@@ -37,6 +39,14 @@ const MENU_CHANNEL_ID = process.env.MENU_CHANNEL_ID;
 const ORDERS_CATEGORY_ID = process.env.ORDERS_CATEGORY_ID; // category where private receipt channels are created
 const ORDERS_CHANNEL_ID = process.env.ORDERS_CHANNEL_ID;   // optional (not required for this version)
 const STAFF_ROLE_ID = process.env.STAFF_ROLE_ID;
+
+// ✅ NEW (optional) bank details via env vars so you don't hardcode in GitHub
+const BANK_ACCOUNT_NAME = process.env.BANK_ACCOUNT_NAME || "YOUR COMPANY LTD";
+const BANK_SORT_CODE = process.env.BANK_SORT_CODE || "00-00-00";
+const BANK_ACCOUNT_NUMBER = process.env.BANK_ACCOUNT_NUMBER || "00000000";
+const BANK_BANK_NAME = process.env.BANK_BANK_NAME || "YOUR BANK";
+const BANK_IBAN = process.env.BANK_IBAN || ""; // optional
+const BANK_SWIFT = process.env.BANK_SWIFT || ""; // optional
 
 function requireEnv(name, value) {
   if (!value) throw new Error(`Missing required env var: ${name}`);
@@ -415,6 +425,7 @@ function qtyOtherModal(category, sku, size, color) {
   return modal;
 }
 
+// Old flow kept (not used in UI anymore)
 function paymentLinkModal(orderId) {
   const modal = new ModalBuilder().setCustomId(`paylink_modal:${orderId}`).setTitle("Add payment link");
 
@@ -465,6 +476,24 @@ async function createReceiptChannel(guild, user, orderId) {
   return channel;
 }
 
+// ✅ NEW: helper to format bank details nicely
+function bankDetailsText(orderId) {
+  const ref = `ORDER-${orderId}`;
+  const extras = [
+    BANK_IBAN ? `IBAN: ${BANK_IBAN}` : null,
+    BANK_SWIFT ? `SWIFT/BIC: ${BANK_SWIFT}` : null,
+  ].filter(Boolean);
+
+  return (
+    `**Bank:** ${BANK_BANK_NAME}\n` +
+    `**Account Name:** ${BANK_ACCOUNT_NAME}\n` +
+    `**Sort Code:** ${BANK_SORT_CODE}\n` +
+    `**Account Number:** ${BANK_ACCOUNT_NUMBER}\n` +
+    (extras.length ? `${extras.join("\n")}\n` : "") +
+    `\n**Reference:** \`${ref}\``
+  );
+}
+
 function receiptEmbed(orderId, items, subtotal, shipping, total, shippingProfile) {
   const lines = items.map(
     (it) => `• **${it.name}** (${it.size}, ${it.color}) × ${it.qty} — ${money(it.qty * it.price_pence)}`
@@ -480,18 +509,24 @@ function receiptEmbed(orderId, items, subtotal, shipping, total, shippingProfile
       {
         name: "Shipping to",
         value: `${shippingProfile.full_name}\n${shippingProfile.address}\n${shippingProfile.city}\n${shippingProfile.postcode}\n${shippingProfile.country}`,
+      },
+      // ✅ NEW: payment instructions + bank details
+      {
+        name: "Payment — Bank Transfer",
+        value:
+          `Please pay the **Total** via bank transfer using the details below.\n` +
+          `Once paid, a staff member will confirm and mark the order as paid.\n\n` +
+          bankDetailsText(orderId),
       }
     )
-    .setFooter({ text: "Staff: use the button below to add a payment link." });
+    .setFooter({ text: "Pay by bank transfer using the reference shown above." });
 }
 
 function staffReceiptControls(orderId) {
   return [
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId(`staff_add_paylink:${orderId}`)
-        .setLabel("Add payment link")
-        .setStyle(ButtonStyle.Primary),
+      // ✅ CHANGE: remove "Add payment link" button from UI, keep "Mark as paid"
+      // (Old paylink handler remains in the code in case you ever want it again.)
       new ButtonBuilder()
         .setCustomId(`staff_mark_paid:${orderId}`)
         .setLabel("Mark as paid ✅")
@@ -520,7 +555,7 @@ client.on("interactionCreate", async (interaction) => {
           `3) Browse categories and select items\n` +
           `4) Add multiple items to your basket\n` +
           `5) Submit your order when you're done\n\n` +
-          `Once submitted, you'll receive a **private receipt channel** where the team can send your payment link.`;
+          `Once submitted, you'll receive a **private receipt channel** with **bank transfer details** to pay.`;
 
         await menuChannel.send({
           content,
@@ -664,7 +699,10 @@ client.on("interactionCreate", async (interaction) => {
 
         // Post receipt + staff controls
         await receiptChannel.send({
-          content: `<@${interaction.user.id}> **Thanks!** Your order has been received.\n<@&${STAFF_ROLE_ID}> please add a payment link below.`,
+          content:
+            `<@${interaction.user.id}> **Thanks!** Your order has been received.\n\n` +
+            `✅ Please pay by **bank transfer** using the details in the receipt below.\n` +
+            `<@&${STAFF_ROLE_ID}> once confirmed, please mark as paid.`,
           embeds: [receiptEmbed(orderId, cart.items, subtotal, shipping, total, shippingProfile)],
           components: staffReceiptControls(orderId),
         });
@@ -678,6 +716,7 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
+      // Old flow kept (button no longer shown)
       if (customId.startsWith("staff_add_paylink:")) {
         const [, orderIdStr] = customId.split(":");
         const orderId = parseInt(orderIdStr, 10);
@@ -819,6 +858,7 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
+      // Old flow kept (not used in UI anymore)
       if (customId.startsWith("paylink_modal:")) {
         const [, orderIdStr] = customId.split(":");
         const orderId = parseInt(orderIdStr, 10);
