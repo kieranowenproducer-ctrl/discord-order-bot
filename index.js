@@ -1,19 +1,25 @@
 // index.js
 // Discord Shop Bot (discord.js v14 + Postgres)
-// - No cart_json usage (fixes your earlier issue)
-// - Modal limited to 5 inputs (fixes Invalid Form Body error)
+// - No cart_json usage
+// - Modal limited to 5 inputs
 // - Creates private receipt channels for each order
 // CHANGE: Bank transfer details shown in receipt channel instead of staff adding a payment link
 // NOTE: "Mark as paid" button is kept, and the old paylink code is kept (just not surfaced in UI)
 
-// ✅ CHANGES APPLIED (per your request):
-// 1) Store name updated everywhere: "Body Market Labs"
-// 2) Shipping form modal updated to include REQUIRED Email + Phone (5 input limit respected)
+// ✅ CHANGES APPLIED (per your instructions):
+// 1) Store name updated everywhere: "Bodymarket Labs"
+// 2) Shipping form modal includes REQUIRED Email + Phone (5 input limit respected)
 //    - Full Name (required)
 //    - Email (required)
 //    - Phone (required)
 //    - Provide Full Address (required)
 //    - Country (required, kept last)
+// 3) Catalog replaced with placeholder items (Item A, Item B, etc.) while keeping your category structure + pricing + DUE IN notes.
+// 4) Shipping is now calculated from the Country field:
+//    - UK: £10
+//    - Europe: £30
+//    - USA: £45
+//    (Fallback: Europe)
 
 const {
   Client,
@@ -49,7 +55,7 @@ const ORDERS_CATEGORY_ID = process.env.ORDERS_CATEGORY_ID; // category where pri
 const ORDERS_CHANNEL_ID = process.env.ORDERS_CHANNEL_ID; // optional (not required for this version)
 const STAFF_ROLE_ID = process.env.STAFF_ROLE_ID;
 
-// ✅ NEW (optional) bank details via env vars so you don't hardcode in GitHub
+// Bank details via env vars so you don't hardcode in GitHub
 const BANK_ACCOUNT_NAME = process.env.BANK_ACCOUNT_NAME || "YOUR COMPANY LTD";
 const BANK_SORT_CODE = process.env.BANK_SORT_CODE || "00-00-00";
 const BANK_ACCOUNT_NUMBER = process.env.BANK_ACCOUNT_NUMBER || "00000000";
@@ -57,8 +63,8 @@ const BANK_BANK_NAME = process.env.BANK_BANK_NAME || "YOUR BANK";
 const BANK_IBAN = process.env.BANK_IBAN || ""; // optional
 const BANK_SWIFT = process.env.BANK_SWIFT || ""; // optional
 
-// ✅ Store branding (single source of truth)
-const STORE_NAME = "Body Market Labs";
+// Store branding
+const STORE_NAME = "Bodymarket Labs";
 
 function requireEnv(name, value) {
   if (!value) throw new Error(`Missing required env var: ${name}`);
@@ -81,7 +87,6 @@ const pool = new Pool({
 });
 
 async function initDb() {
-  // Profiles
   await pool.query(`
     CREATE TABLE IF NOT EXISTS user_profiles (
       user_id TEXT PRIMARY KEY,
@@ -93,11 +98,10 @@ async function initDb() {
     );
   `);
 
-  // Backwards-compatible schema upgrade if tables already exist:
+  // Backwards-compatible schema upgrade if table exists from older version
   await pool.query(`ALTER TABLE IF EXISTS user_profiles ADD COLUMN IF NOT EXISTS email TEXT;`);
   await pool.query(`ALTER TABLE IF EXISTS user_profiles ADD COLUMN IF NOT EXISTS phone TEXT;`);
 
-  // Shipping profile (now stores full address in one field + country)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS shipping_profiles (
       user_id TEXT PRIMARY KEY REFERENCES user_profiles(user_id) ON DELETE CASCADE,
@@ -107,14 +111,9 @@ async function initDb() {
     );
   `);
 
-  // Backwards-compatible schema upgrade if shipping_profiles exists from older version:
   await pool.query(`ALTER TABLE IF EXISTS shipping_profiles ADD COLUMN IF NOT EXISTS full_address TEXT;`);
   await pool.query(`ALTER TABLE IF EXISTS shipping_profiles ADD COLUMN IF NOT EXISTS country TEXT;`);
 
-  // If old columns exist, keep them (no need to drop). We'll just stop using them.
-  // address/city/postcode might exist in older schema.
-
-  // Carts + items
   await pool.query(`
     CREATE TABLE IF NOT EXISTS carts (
       cart_id BIGSERIAL PRIMARY KEY,
@@ -137,7 +136,6 @@ async function initDb() {
     );
   `);
 
-  // Orders + items
   await pool.query(`
     CREATE TABLE IF NOT EXISTS orders (
       order_id BIGSERIAL PRIMARY KEY,
@@ -157,11 +155,11 @@ async function initDb() {
     );
   `);
 
-  // Backwards-compatible schema upgrade if orders exists:
   await pool.query(`ALTER TABLE IF EXISTS orders ADD COLUMN IF NOT EXISTS email TEXT;`);
   await pool.query(`ALTER TABLE IF EXISTS orders ADD COLUMN IF NOT EXISTS phone TEXT;`);
   await pool.query(`ALTER TABLE IF EXISTS orders ADD COLUMN IF NOT EXISTS full_address TEXT;`);
   await pool.query(`ALTER TABLE IF EXISTS orders ADD COLUMN IF NOT EXISTS country TEXT;`);
+  await pool.query(`ALTER TABLE IF EXISTS orders ADD COLUMN IF NOT EXISTS shipping_pence INT;`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS order_items (
@@ -254,16 +252,132 @@ function money(pence) {
   return `£${(pence / 100).toFixed(2)}`;
 }
 
-/* ----------------------------- SHOP CATALOG ----------------------------- */
+/* ----------------------------- SHIPPING LOGIC ---------------------------- */
 
-const SHIPPING_PENCE = 499;
+const SHIPPING_UK_PENCE = 1000;
+const SHIPPING_EU_PENCE = 3000;
+const SHIPPING_USA_PENCE = 4500;
+
+// Simple country/region matcher from the "Country" field.
+// - UK/England/Scotland/Wales/NI/GB/Great Britain => UK rate
+// - USA/US/United States/America => USA rate
+// - Europe/EU or European country names => Europe rate
+// - Fallback => Europe rate
+function getShippingPenceForCountry(countryRaw) {
+  const c = String(countryRaw || "").trim().toLowerCase();
+  if (!c) return SHIPPING_EU_PENCE;
+
+  const isUK =
+    c.includes("uk") ||
+    c.includes("united kingdom") ||
+    c.includes("great britain") ||
+    c === "gb" ||
+    c.includes("england") ||
+    c.includes("scotland") ||
+    c.includes("wales") ||
+    c.includes("northern ireland");
+
+  if (isUK) return SHIPPING_UK_PENCE;
+
+  const isUSA =
+    c.includes("usa") ||
+    c === "us" ||
+    c.includes("united states") ||
+    c.includes("america");
+
+  if (isUSA) return SHIPPING_USA_PENCE;
+
+  const europeKeywords = ["europe", "eu", "european"];
+  if (europeKeywords.some((k) => c.includes(k))) return SHIPPING_EU_PENCE;
+
+  const europeCountries = new Set([
+    "albania","andorra","austria","belarus","belgium","bosnia","bulgaria","croatia","cyprus","czech republic","czechia",
+    "denmark","estonia","finland","france","germany","greece","hungary","iceland","ireland","italy","kosovo","latvia","liechtenstein",
+    "lithuania","luxembourg","malta","moldova","monaco","montenegro","netherlands","north macedonia","norway","poland","portugal",
+    "romania","san marino","serbia","slovakia","slovenia","spain","sweden","switzerland","turkey","ukraine","vatican","vatican city",
+    "russia"
+  ]);
+
+  // Quick exact match or contains match for common variants
+  for (const name of europeCountries) {
+    if (c === name || c.includes(name)) return SHIPPING_EU_PENCE;
+  }
+
+  return SHIPPING_EU_PENCE;
+}
+
+async function getUserShippingProfile(userId) {
+  const res = await pool.query(
+    `
+    SELECT up.full_name, up.email, up.phone, sp.full_address, sp.country
+    FROM user_profiles up
+    JOIN shipping_profiles sp ON sp.user_id = up.user_id
+    WHERE up.user_id = $1
+    `,
+    [userId]
+  );
+  return res.rows[0] || null;
+}
+
+/* ----------------------------- SHOP CATALOG ----------------------------- */
+/*
+  IMPORTANT:
+  - You asked for placeholders (Item A, Item B, etc.) while keeping categories + pricing + DUE IN notes.
+  - The bot’s flow expects size + colour selections; to avoid changing the flow, each item uses:
+      sizes: ["Standard"]
+      colors: ["Standard"]
+*/
 
 const CATALOG = {
-  "T-Shirts": [
-    { sku: "TSHIRT-001", name: "T-Shirt", price_pence: 1999, sizes: ["S", "M", "L", "XL"], colors: ["White", "Black", "Grey"] },
+  "⭐ Best Sellers (Pens)": [
+    { sku: "A01", name: "Item A (30mg) — Pen", price_pence: 14000, sizes: ["Standard"], colors: ["Standard"] },
+    { sku: "A02", name: "Item B (40mg) — Pen [DUE IN]", price_pence: 16000, sizes: ["Standard"], colors: ["Standard"] },
+    { sku: "A03", name: "Item C (40mg) — Pen", price_pence: 11000, sizes: ["Standard"], colors: ["Standard"] },
   ],
-  Hoodies: [
-    { sku: "HOODIE-001", name: "Hoodie", price_pence: 3999, sizes: ["S", "M", "L", "XL"], colors: ["Grey", "Black"] },
+
+  "💉 Premium Pens": [
+    { sku: "B01", name: "Item D (1000mg)", price_pence: 13000, sizes: ["Standard"], colors: ["Standard"] },
+    { sku: "B02", name: "Item E (20mg / 20mg) [DUE IN]", price_pence: 11500, sizes: ["Standard"], colors: ["Standard"] },
+    { sku: "B03", name: "Item F (70mg) [DUE IN]", price_pence: 10000, sizes: ["Standard"], colors: ["Standard"] },
+  ],
+
+  "🧬 Peptides (Vials)": [
+    { sku: "C01", name: "Item G (30mg)", price_pence: 8500, sizes: ["Standard"], colors: ["Standard"] },
+    { sku: "C02", name: "Item H (40mg) [DUE IN]", price_pence: 7500, sizes: ["Standard"], colors: ["Standard"] },
+    { sku: "C03", name: "Item I (10mg)", price_pence: 4000, sizes: ["Standard"], colors: ["Standard"] },
+    { sku: "C04", name: "Item J (40mg) [DUE IN]", price_pence: 4500, sizes: ["Standard"], colors: ["Standard"] },
+    { sku: "C05", name: "Item K (10mg)", price_pence: 2000, sizes: ["Standard"], colors: ["Standard"] },
+    { sku: "C06", name: "Item L (10mg)", price_pence: 1500, sizes: ["Standard"], colors: ["Standard"] },
+  ],
+
+  "👑 Injectables (Oils)": [
+    { sku: "D01", name: "Item M (400mg)", price_pence: 3500, sizes: ["Standard"], colors: ["Standard"] },
+    { sku: "D02", name: "Item N (300mg / 250mg)", price_pence: 3000, sizes: ["Standard"], colors: ["Standard"] },
+    { sku: "D03", name: "Item O (300mg)", price_pence: 3000, sizes: ["Standard"], colors: ["Standard"] },
+    { sku: "D04", name: "Item P (330mg / 150mg)", price_pence: 3500, sizes: ["Standard"], colors: ["Standard"] },
+    { sku: "D05", name: "Item Q (Blend 200)", price_pence: 3500, sizes: ["Standard"], colors: ["Standard"] },
+    { sku: "D06", name: "Item R (100iu)", price_pence: 12000, sizes: ["Standard"], colors: ["Standard"] },
+  ],
+
+  "💊 Health & Performance": [
+    { sku: "E01", name: "Item S (100 tabs)", price_pence: 3500, sizes: ["Standard"], colors: ["Standard"] },
+    { sku: "E02", name: "Item T (Individual strip)", price_pence: 1000, sizes: ["Standard"], colors: ["Standard"] },
+    { sku: "E03", name: "Item U (100 tabs)", price_pence: 3500, sizes: ["Standard"], colors: ["Standard"] },
+    { sku: "E04", name: "Item V (Jelly)", price_pence: 1000, sizes: ["Standard"], colors: ["Standard"] },
+    { sku: "E05", name: "Item W (5000iu)", price_pence: 2500, sizes: ["Standard"], colors: ["Standard"] },
+    { sku: "E06", name: "Item X (150iu)", price_pence: 3000, sizes: ["Standard"], colors: ["Standard"] },
+    { sku: "E07", name: "Item Y (PCT pack)", price_pence: 2500, sizes: ["Standard"], colors: ["Standard"] },
+    { sku: "E08", name: "Item Z (20mg / 100 tabs)", price_pence: 4500, sizes: ["Standard"], colors: ["Standard"] },
+    { sku: "E09", name: "Item AA (B12 injections 10x1)", price_pence: 2000, sizes: ["Standard"], colors: ["Standard"] },
+  ],
+
+  "💤 Pain & Sleep": [
+    { sku: "F01", name: "Item AB (10mg / 140 tabs)", price_pence: 4500, sizes: ["Standard"], colors: ["Standard"] },
+    { sku: "F02", name: "Item AB (Bundle: 5 for £200)", price_pence: 20000, sizes: ["Standard"], colors: ["Standard"] },
+    { sku: "F03", name: "Item AC (10mg) — 1 sleeve", price_pence: 1000, sizes: ["Standard"], colors: ["Standard"] },
+    { sku: "F04", name: "Item AC (10mg) — 3 sleeves", price_pence: 2500, sizes: ["Standard"], colors: ["Standard"] },
+    { sku: "F05", name: "Item AD (300mg / 150 tabs)", price_pence: 4500, sizes: ["Standard"], colors: ["Standard"] },
+    { sku: "F06", name: "Item AE (50mg / 100 tabs)", price_pence: 4500, sizes: ["Standard"], colors: ["Standard"] },
   ],
 };
 
@@ -342,7 +456,7 @@ function sizeSelectComponents(category, sku) {
   const row = new ActionRowBuilder().addComponents(
     new StringSelectMenuBuilder()
       .setCustomId(`select_size:${category}:${sku}`)
-      .setPlaceholder("Choose a size…")
+      .setPlaceholder("Choose an option…")
       .addOptions(item.sizes.map((s) => ({ label: s, value: s })))
   );
   return [row];
@@ -353,7 +467,7 @@ function colorSelectComponents(category, sku, size) {
   const row = new ActionRowBuilder().addComponents(
     new StringSelectMenuBuilder()
       .setCustomId(`select_color:${category}:${sku}:${size}`)
-      .setPlaceholder("Choose a colour…")
+      .setPlaceholder("Choose an option…")
       .addOptions(item.colors.map((c) => ({ label: c, value: c })))
   );
   return [row];
@@ -385,26 +499,13 @@ function cartActionsComponents() {
 /* -------------------------- MODALS (MAX 5 INPUTS) ------------------------- */
 
 function shippingModal() {
-  // Exactly 5 fields (Discord modal limit)
   const modal = new ModalBuilder().setCustomId("shipping_modal").setTitle("Shipping details");
 
-  const fullName = new TextInputBuilder()
-    .setCustomId("full_name")
-    .setLabel("Full name")
-    .setStyle(TextInputStyle.Short)
-    .setRequired(true);
+  const fullName = new TextInputBuilder().setCustomId("full_name").setLabel("Full name").setStyle(TextInputStyle.Short).setRequired(true);
 
-  const email = new TextInputBuilder()
-    .setCustomId("email")
-    .setLabel("Email")
-    .setStyle(TextInputStyle.Short)
-    .setRequired(true);
+  const email = new TextInputBuilder().setCustomId("email").setLabel("Email").setStyle(TextInputStyle.Short).setRequired(true);
 
-  const phone = new TextInputBuilder()
-    .setCustomId("phone")
-    .setLabel("Phone number")
-    .setStyle(TextInputStyle.Short)
-    .setRequired(true);
+  const phone = new TextInputBuilder().setCustomId("phone").setLabel("Phone number").setStyle(TextInputStyle.Short).setRequired(true);
 
   const fullAddress = new TextInputBuilder()
     .setCustomId("full_address")
@@ -412,19 +513,14 @@ function shippingModal() {
     .setStyle(TextInputStyle.Paragraph)
     .setRequired(true);
 
-  const country = new TextInputBuilder()
-    .setCustomId("country")
-    .setLabel("Country")
-    .setStyle(TextInputStyle.Short)
-    .setRequired(true);
+  const country = new TextInputBuilder().setCustomId("country").setLabel("Country").setStyle(TextInputStyle.Short).setRequired(true);
 
-  // Country kept last (per your request)
   modal.addComponents(
     new ActionRowBuilder().addComponents(fullName),
     new ActionRowBuilder().addComponents(email),
     new ActionRowBuilder().addComponents(phone),
     new ActionRowBuilder().addComponents(fullAddress),
-    new ActionRowBuilder().addComponents(country)
+    new ActionRowBuilder().addComponents(country) // keep last
   );
 
   return modal;
@@ -433,11 +529,7 @@ function shippingModal() {
 function qtyOtherModal(category, sku, size, color) {
   const modal = new ModalBuilder().setCustomId(`qty_other_modal:${category}:${sku}:${size}:${color}`).setTitle("Quantity");
 
-  const qty = new TextInputBuilder()
-    .setCustomId("qty")
-    .setLabel("Enter quantity (number)")
-    .setStyle(TextInputStyle.Short)
-    .setRequired(true);
+  const qty = new TextInputBuilder().setCustomId("qty").setLabel("Enter quantity (number)").setStyle(TextInputStyle.Short).setRequired(true);
 
   modal.addComponents(new ActionRowBuilder().addComponents(qty));
   return modal;
@@ -468,21 +560,16 @@ async function createReceiptChannel(guild, user, orderId) {
     type: ChannelType.GuildText,
     parent: category?.id || null,
     permissionOverwrites: [
-      // @everyone denied
-      { id: guild.roles.everyone.id, deny: ["ViewChannel"] },
-      // customer allowed
-      { id: user.id, allow: ["ViewChannel", "SendMessages", "ReadMessageHistory"] },
-      // staff role allowed
-      { id: STAFF_ROLE_ID, allow: ["ViewChannel", "SendMessages", "ReadMessageHistory"] },
-      // bot allowed
-      { id: guild.members.me.id, allow: ["ViewChannel", "SendMessages", "ReadMessageHistory", "ManageChannels"] },
+      { id: guild.roles.everyone.id, deny: ["ViewChannel"] }, // @everyone denied
+      { id: user.id, allow: ["ViewChannel", "SendMessages", "ReadMessageHistory"] }, // customer allowed
+      { id: STAFF_ROLE_ID, allow: ["ViewChannel", "SendMessages", "ReadMessageHistory"] }, // staff role allowed
+      { id: guild.members.me.id, allow: ["ViewChannel", "SendMessages", "ReadMessageHistory", "ManageChannels"] }, // bot allowed
     ],
   });
 
   return channel;
 }
 
-// helper to format bank details nicely
 function bankDetailsText(orderId) {
   const ref = `ORDER-${orderId}`;
   const extras = [BANK_IBAN ? `IBAN: ${BANK_IBAN}` : null, BANK_SWIFT ? `SWIFT/BIC: ${BANK_SWIFT}` : null].filter(Boolean);
@@ -524,6 +611,15 @@ function receiptEmbed(orderId, items, subtotal, shipping, total, shippingProfile
           `Please pay the **Total** via bank transfer using the details below.\n` +
           `Once paid, a staff member will confirm and mark the order as paid.\n\n` +
           bankDetailsText(orderId),
+      },
+      {
+        name: "Dispatch",
+        value: "Cut-off: **15:30 (Mon–Fri Dispatch)**",
+      },
+      {
+        name: "Overseas disclaimer",
+        value:
+          "Shipping is at your own risk. No reships or refunds for customs seizures. By ordering, you accept these terms.",
       }
     )
     .setFooter({ text: "Pay by bank transfer using the reference shown above." });
@@ -557,12 +653,11 @@ client.on("interactionCreate", async (interaction) => {
           `3) Browse categories and select items\n` +
           `4) Add multiple items to your basket\n` +
           `5) Submit your order when you're done\n\n` +
+          `**Shipping:** UK Tracked £10 • Europe £30 • USA £45\n` +
+          `**Cut-off:** 15:30 (Mon–Fri Dispatch)\n\n` +
           `Once submitted, you'll receive a **private receipt channel** with **bank transfer details** to pay.`;
 
-        await menuChannel.send({
-          content,
-          components: menuMessageComponents(),
-        });
+        await menuChannel.send({ content, components: menuMessageComponents() });
 
         return interaction.reply({ content: "✅ Shop menu message posted/refreshed in the menu channel.", ephemeral: true });
       }
@@ -574,7 +669,6 @@ client.on("interactionCreate", async (interaction) => {
       const { customId } = interaction;
 
       if (customId === "open_menu") {
-        // Step 1: force shipping details (5-field modal)
         return interaction.showModal(shippingModal());
       }
 
@@ -596,6 +690,10 @@ client.on("interactionCreate", async (interaction) => {
 
         const cart = await getCartSummary(interaction.user.id);
 
+        // Shipping depends on country (we should have it already because shipping modal comes first)
+        const profile = await getUserShippingProfile(interaction.user.id);
+        const shippingPence = getShippingPenceForCountry(profile?.country);
+
         const basketLines = cart.items.map(
           (it) => `• **${it.name}** (${it.size}, ${it.color}) × ${it.qty} — ${money(it.qty * it.price_pence)}`
         );
@@ -606,8 +704,8 @@ client.on("interactionCreate", async (interaction) => {
             `**Your basket**\n` +
             `${basketLines.join("\n")}\n\n` +
             `**Subtotal:** ${money(cart.subtotal_pence)}\n` +
-            `**Shipping:** ${money(SHIPPING_PENCE)}\n` +
-            `**Total:** ${money(cart.subtotal_pence + SHIPPING_PENCE)}`,
+            `**Shipping:** ${money(shippingPence)}\n` +
+            `**Total:** ${money(cart.subtotal_pence + shippingPence)}`,
           components: cartActionsComponents(),
           ephemeral: true,
         });
@@ -619,12 +717,7 @@ client.on("interactionCreate", async (interaction) => {
       }
 
       if (customId === "cart_add_more") {
-        // Go back to categories
-        return interaction.reply({
-          content: "Choose a category:",
-          components: categorySelectComponents(),
-          ephemeral: true,
-        });
+        return interaction.reply({ content: "Choose a category:", components: categorySelectComponents(), ephemeral: true });
       }
 
       if (customId === "cart_clear") {
@@ -636,30 +729,18 @@ client.on("interactionCreate", async (interaction) => {
         const cart = await getCartSummary(interaction.user.id);
         if (!cart.items.length) return interaction.reply({ content: "Your cart is empty.", ephemeral: true });
 
-        // Fetch shipping/profile
-        const profileRes = await pool.query(
-          `
-          SELECT up.full_name, up.email, up.phone, sp.full_address, sp.country
-          FROM user_profiles up
-          JOIN shipping_profiles sp ON sp.user_id = up.user_id
-          WHERE up.user_id = $1
-          `,
-          [interaction.user.id]
-        );
-
-        if (!profileRes.rows.length) {
+        const shippingProfile = await getUserShippingProfile(interaction.user.id);
+        if (!shippingProfile) {
           return interaction.reply({
             content: "I don't have your shipping details yet. Click the menu button again and enter your details.",
             ephemeral: true,
           });
         }
 
-        const shippingProfile = profileRes.rows[0];
         const subtotal = cart.subtotal_pence;
-        const shipping = SHIPPING_PENCE;
+        const shipping = getShippingPenceForCountry(shippingProfile.country);
         const total = subtotal + shipping;
 
-        // Create order
         const orderRes = await pool.query(
           `
           INSERT INTO orders (
@@ -684,7 +765,6 @@ client.on("interactionCreate", async (interaction) => {
 
         const orderId = orderRes.rows[0].order_id;
 
-        // Copy cart_items -> order_items
         for (const it of cart.items) {
           await pool.query(
             `
@@ -695,14 +775,11 @@ client.on("interactionCreate", async (interaction) => {
           );
         }
 
-        // Create receipt private channel
         const guild = interaction.guild;
         const receiptChannel = await createReceiptChannel(guild, interaction.user, orderId);
 
-        // Update order with receipt channel id
         await pool.query(`UPDATE orders SET receipt_channel_id=$1 WHERE order_id=$2`, [receiptChannel.id, orderId]);
 
-        // Post receipt + staff controls
         await receiptChannel.send({
           content:
             `<@${interaction.user.id}> **Thanks!** Your order has been received.\n\n` +
@@ -712,7 +789,6 @@ client.on("interactionCreate", async (interaction) => {
           components: staffReceiptControls(orderId),
         });
 
-        // Clear cart
         await clearCart(interaction.user.id);
 
         return interaction.reply({
@@ -743,10 +819,7 @@ client.on("interactionCreate", async (interaction) => {
 
         await pool.query(`UPDATE orders SET status='paid' WHERE order_id=$1`, [orderId]);
 
-        return interaction.reply({
-          content: `✅ Order #${orderId} marked as paid.`,
-          ephemeral: false,
-        });
+        return interaction.reply({ content: `✅ Order #${orderId} marked as paid.`, ephemeral: false });
       }
     }
 
@@ -757,22 +830,14 @@ client.on("interactionCreate", async (interaction) => {
 
       if (customId === "select_category") {
         const category = interaction.values[0];
-        return interaction.reply({
-          content: `Now choose an item:`,
-          components: itemSelectComponents(category),
-          ephemeral: true,
-        });
+        return interaction.reply({ content: `Now choose an item:`, components: itemSelectComponents(category), ephemeral: true });
       }
 
       if (customId.startsWith("select_item:")) {
         const [, category] = customId.split(":");
         const sku = interaction.values[0];
 
-        return interaction.reply({
-          content: `Selected item. Choose a size:`,
-          components: sizeSelectComponents(category, sku),
-          ephemeral: true,
-        });
+        return interaction.reply({ content: `Selected item. Choose an option:`, components: sizeSelectComponents(category, sku), ephemeral: true });
       }
 
       if (customId.startsWith("select_size:")) {
@@ -780,7 +845,7 @@ client.on("interactionCreate", async (interaction) => {
         const size = interaction.values[0];
 
         return interaction.reply({
-          content: `Size **${size}** selected. Choose a colour:`,
+          content: `Option **${size}** selected. Choose an option:`,
           components: colorSelectComponents(category, sku, size),
           ephemeral: true,
         });
@@ -790,11 +855,7 @@ client.on("interactionCreate", async (interaction) => {
         const [, category, sku, size] = customId.split(":");
         const color = interaction.values[0];
 
-        return interaction.reply({
-          content: `Colour **${color}** selected — how many?`,
-          components: qtyButtonsComponents(category, sku, size, color),
-          ephemeral: true,
-        });
+        return interaction.reply({ content: `Option **${color}** selected — how many?`, components: qtyButtonsComponents(category, sku, size, color), ephemeral: true });
       }
     }
 
@@ -816,12 +877,7 @@ client.on("interactionCreate", async (interaction) => {
 
         await upsertProfile(interaction.user.id, full_name, email, phone, { full_address, country });
 
-        // After shipping saved, show categories
-        return interaction.reply({
-          content: "✅ Details saved. Choose a category:",
-          components: categorySelectComponents(),
-          ephemeral: true,
-        });
+        return interaction.reply({ content: "✅ Details saved. Choose a category:", components: categorySelectComponents(), ephemeral: true });
       }
 
       if (customId.startsWith("qty_other_modal:")) {
@@ -846,6 +902,9 @@ client.on("interactionCreate", async (interaction) => {
         });
 
         const cart = await getCartSummary(interaction.user.id);
+        const profile = await getUserShippingProfile(interaction.user.id);
+        const shippingPence = getShippingPenceForCountry(profile?.country);
+
         const basketLines = cart.items.map(
           (it) => `• **${it.name}** (${it.size}, ${it.color}) × ${it.qty} — ${money(it.qty * it.price_pence)}`
         );
@@ -856,8 +915,8 @@ client.on("interactionCreate", async (interaction) => {
             `**Your basket**\n` +
             `${basketLines.join("\n")}\n\n` +
             `**Subtotal:** ${money(cart.subtotal_pence)}\n` +
-            `**Shipping:** ${money(SHIPPING_PENCE)}\n` +
-            `**Total:** ${money(cart.subtotal_pence + SHIPPING_PENCE)}`,
+            `**Shipping:** ${money(shippingPence)}\n` +
+            `**Total:** ${money(cart.subtotal_pence + shippingPence)}`,
           components: cartActionsComponents(),
           ephemeral: true,
         });
