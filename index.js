@@ -6,13 +6,8 @@
 // CHANGE: Bank transfer details shown in receipt channel instead of staff adding a payment link
 // NOTE: "Mark as paid" button is kept, and the old paylink code is kept (just not surfaced in UI)
 
-// ✅ FIX IN THIS VERSION:
-// /setupshop now uses deferReply() + editReply() so Discord never times out with
-// "The application did not respond".
-
-// ✅ FLOW:
-// Category -> Item -> Quantity (1–5 / Other)
-// (No extra Standard dropdowns)
+// ✅ LAST CHANGE IN THIS VERSION (ONLY):
+// Added the requested payment reference disclaimer at the very end of the receipt embed.
 
 const {
   Client,
@@ -594,6 +589,12 @@ function receiptEmbed(orderId, items, subtotal, shipping, total, shippingProfile
       {
         name: "Overseas disclaimer",
         value: "Shipping is at your own risk. No reships or refunds for customs seizures. By ordering, you accept these terms.",
+      },
+      // ✅ NEW: requested disclaimer (added at the very end)
+      {
+        name: "IMPORTANT — Payment Reference",
+        value:
+          "PLEASE NOTE- if you use any other reference when making the payment or mention a product as the reference, the order will be cancelled and your money will not be refunded. Please ensure that the reference number is as per The invoice/order summary",
       }
     )
     .setFooter({ text: "Pay by bank transfer using the reference shown above." });
@@ -619,7 +620,6 @@ client.on("interactionCreate", async (interaction) => {
       }
 
       if (interaction.commandName === "setupshop") {
-        // ✅ IMPORTANT: prevent "application did not respond"
         await interaction.deferReply({ ephemeral: true });
         deferred = true;
 
