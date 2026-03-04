@@ -6,6 +6,15 @@
 // CHANGE: Bank transfer details shown in receipt channel instead of staff adding a payment link
 // NOTE: "Mark as paid" button is kept, and the old paylink code is kept (just not surfaced in UI)
 
+// ✅ CHANGES APPLIED (per your request):
+// 1) Store name updated everywhere: "Body Market Labs"
+// 2) Shipping form modal updated to include REQUIRED Email + Phone (5 input limit respected)
+//    - Full Name (required)
+//    - Email (required)
+//    - Phone (required)
+//    - Provide Full Address (required)
+//    - Country (required, kept last)
+
 const {
   Client,
   GatewayIntentBits,
@@ -37,7 +46,7 @@ const GUILD_ID = process.env.GUILD_ID;
 const MENU_CHANNEL_ID = process.env.MENU_CHANNEL_ID;
 
 const ORDERS_CATEGORY_ID = process.env.ORDERS_CATEGORY_ID; // category where private receipt channels are created
-const ORDERS_CHANNEL_ID = process.env.ORDERS_CHANNEL_ID;   // optional (not required for this version)
+const ORDERS_CHANNEL_ID = process.env.ORDERS_CHANNEL_ID; // optional (not required for this version)
 const STAFF_ROLE_ID = process.env.STAFF_ROLE_ID;
 
 // ✅ NEW (optional) bank details via env vars so you don't hardcode in GitHub
@@ -47,6 +56,9 @@ const BANK_ACCOUNT_NUMBER = process.env.BANK_ACCOUNT_NUMBER || "00000000";
 const BANK_BANK_NAME = process.env.BANK_BANK_NAME || "YOUR BANK";
 const BANK_IBAN = process.env.BANK_IBAN || ""; // optional
 const BANK_SWIFT = process.env.BANK_SWIFT || ""; // optional
+
+// ✅ Store branding (single source of truth)
+const STORE_NAME = "Body Market Labs";
 
 function requireEnv(name, value) {
   if (!value) throw new Error(`Missing required env var: ${name}`);
@@ -69,27 +81,40 @@ const pool = new Pool({
 });
 
 async function initDb() {
-  // We use a proper relational schema (no cart_json), so you won't hit that error again.
+  // Profiles
   await pool.query(`
     CREATE TABLE IF NOT EXISTS user_profiles (
       user_id TEXT PRIMARY KEY,
       full_name TEXT,
+      email TEXT,
+      phone TEXT,
       created_at TIMESTAMPTZ DEFAULT NOW(),
       updated_at TIMESTAMPTZ DEFAULT NOW()
     );
   `);
 
+  // Backwards-compatible schema upgrade if tables already exist:
+  await pool.query(`ALTER TABLE IF EXISTS user_profiles ADD COLUMN IF NOT EXISTS email TEXT;`);
+  await pool.query(`ALTER TABLE IF EXISTS user_profiles ADD COLUMN IF NOT EXISTS phone TEXT;`);
+
+  // Shipping profile (now stores full address in one field + country)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS shipping_profiles (
       user_id TEXT PRIMARY KEY REFERENCES user_profiles(user_id) ON DELETE CASCADE,
-      address TEXT,
-      city TEXT,
-      postcode TEXT,
+      full_address TEXT,
       country TEXT,
       updated_at TIMESTAMPTZ DEFAULT NOW()
     );
   `);
 
+  // Backwards-compatible schema upgrade if shipping_profiles exists from older version:
+  await pool.query(`ALTER TABLE IF EXISTS shipping_profiles ADD COLUMN IF NOT EXISTS full_address TEXT;`);
+  await pool.query(`ALTER TABLE IF EXISTS shipping_profiles ADD COLUMN IF NOT EXISTS country TEXT;`);
+
+  // If old columns exist, keep them (no need to drop). We'll just stop using them.
+  // address/city/postcode might exist in older schema.
+
+  // Carts + items
   await pool.query(`
     CREATE TABLE IF NOT EXISTS carts (
       cart_id BIGSERIAL PRIMARY KEY,
@@ -112,14 +137,15 @@ async function initDb() {
     );
   `);
 
+  // Orders + items
   await pool.query(`
     CREATE TABLE IF NOT EXISTS orders (
       order_id BIGSERIAL PRIMARY KEY,
       user_id TEXT NOT NULL,
       full_name TEXT,
-      address TEXT,
-      city TEXT,
-      postcode TEXT,
+      email TEXT,
+      phone TEXT,
+      full_address TEXT,
       country TEXT,
       subtotal_pence INT NOT NULL,
       shipping_pence INT NOT NULL,
@@ -130,6 +156,12 @@ async function initDb() {
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
   `);
+
+  // Backwards-compatible schema upgrade if orders exists:
+  await pool.query(`ALTER TABLE IF EXISTS orders ADD COLUMN IF NOT EXISTS email TEXT;`);
+  await pool.query(`ALTER TABLE IF EXISTS orders ADD COLUMN IF NOT EXISTS phone TEXT;`);
+  await pool.query(`ALTER TABLE IF EXISTS orders ADD COLUMN IF NOT EXISTS full_address TEXT;`);
+  await pool.query(`ALTER TABLE IF EXISTS orders ADD COLUMN IF NOT EXISTS country TEXT;`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS order_items (
@@ -145,29 +177,30 @@ async function initDb() {
   `);
 }
 
-async function upsertProfile(userId, fullName, shipping) {
+async function upsertProfile(userId, fullName, email, phone, shipping) {
   await pool.query(
     `
-    INSERT INTO user_profiles (user_id, full_name, updated_at)
-    VALUES ($1, $2, NOW())
+    INSERT INTO user_profiles (user_id, full_name, email, phone, updated_at)
+    VALUES ($1, $2, $3, $4, NOW())
     ON CONFLICT (user_id) DO UPDATE
-    SET full_name = EXCLUDED.full_name, updated_at = NOW();
+    SET full_name = EXCLUDED.full_name,
+        email = EXCLUDED.email,
+        phone = EXCLUDED.phone,
+        updated_at = NOW();
     `,
-    [userId, fullName]
+    [userId, fullName, email, phone]
   );
 
   await pool.query(
     `
-    INSERT INTO shipping_profiles (user_id, address, city, postcode, country, updated_at)
-    VALUES ($1, $2, $3, $4, $5, NOW())
+    INSERT INTO shipping_profiles (user_id, full_address, country, updated_at)
+    VALUES ($1, $2, $3, NOW())
     ON CONFLICT (user_id) DO UPDATE
-    SET address = EXCLUDED.address,
-        city = EXCLUDED.city,
-        postcode = EXCLUDED.postcode,
+    SET full_address = EXCLUDED.full_address,
         country = EXCLUDED.country,
         updated_at = NOW();
     `,
-    [userId, shipping.address, shipping.city, shipping.postcode, shipping.country]
+    [userId, shipping.full_address, shipping.country]
   );
 }
 
@@ -264,9 +297,7 @@ const commands = [
     .setDescription("Post/refresh the shop menu message in the menu channel")
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
 
-  new SlashCommandBuilder()
-    .setName("ping")
-    .setDescription("Health check"),
+  new SlashCommandBuilder().setName("ping").setDescription("Health check"),
 ].map((c) => c.toJSON());
 
 async function registerCommands() {
@@ -278,20 +309,14 @@ async function registerCommands() {
 
 function menuMessageComponents() {
   const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId("open_menu")
-      .setLabel("Click to see our menu")
-      .setStyle(ButtonStyle.Primary)
+    new ButtonBuilder().setCustomId("open_menu").setLabel("Click to see our menu").setStyle(ButtonStyle.Primary)
   );
   return [row];
 }
 
 function categorySelectComponents() {
   const row = new ActionRowBuilder().addComponents(
-    new StringSelectMenuBuilder()
-      .setCustomId("select_category")
-      .setPlaceholder("Choose a category…")
-      .addOptions(categoryOptions)
+    new StringSelectMenuBuilder().setCustomId("select_category").setPlaceholder("Choose a category…").addOptions(categoryOptions)
   );
   return [row];
 }
@@ -337,18 +362,12 @@ function colorSelectComponents(category, sku, size) {
 function qtyButtonsComponents(category, sku, size, color) {
   const row1 = new ActionRowBuilder().addComponents(
     ...[1, 2, 3, 4, 5].map((n) =>
-      new ButtonBuilder()
-        .setCustomId(`add_qty:${category}:${sku}:${size}:${color}:${n}`)
-        .setLabel(String(n))
-        .setStyle(ButtonStyle.Secondary)
+      new ButtonBuilder().setCustomId(`add_qty:${category}:${sku}:${size}:${color}:${n}`).setLabel(String(n)).setStyle(ButtonStyle.Secondary)
     )
   );
 
   const row2 = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`add_qty_other:${category}:${sku}:${size}:${color}`)
-      .setLabel("Other…")
-      .setStyle(ButtonStyle.Primary)
+    new ButtonBuilder().setCustomId(`add_qty_other:${category}:${sku}:${size}:${color}`).setLabel("Other…").setStyle(ButtonStyle.Primary)
   );
 
   return [row1, row2];
@@ -375,22 +394,22 @@ function shippingModal() {
     .setStyle(TextInputStyle.Short)
     .setRequired(true);
 
-  const address = new TextInputBuilder()
-    .setCustomId("address")
-    .setLabel("Address")
+  const email = new TextInputBuilder()
+    .setCustomId("email")
+    .setLabel("Email")
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true);
+
+  const phone = new TextInputBuilder()
+    .setCustomId("phone")
+    .setLabel("Phone number")
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true);
+
+  const fullAddress = new TextInputBuilder()
+    .setCustomId("full_address")
+    .setLabel("Provide Full Address")
     .setStyle(TextInputStyle.Paragraph)
-    .setRequired(true);
-
-  const city = new TextInputBuilder()
-    .setCustomId("city")
-    .setLabel("City")
-    .setStyle(TextInputStyle.Short)
-    .setRequired(true);
-
-  const postcode = new TextInputBuilder()
-    .setCustomId("postcode")
-    .setLabel("Postcode")
-    .setStyle(TextInputStyle.Short)
     .setRequired(true);
 
   const country = new TextInputBuilder()
@@ -399,11 +418,12 @@ function shippingModal() {
     .setStyle(TextInputStyle.Short)
     .setRequired(true);
 
+  // Country kept last (per your request)
   modal.addComponents(
     new ActionRowBuilder().addComponents(fullName),
-    new ActionRowBuilder().addComponents(address),
-    new ActionRowBuilder().addComponents(city),
-    new ActionRowBuilder().addComponents(postcode),
+    new ActionRowBuilder().addComponents(email),
+    new ActionRowBuilder().addComponents(phone),
+    new ActionRowBuilder().addComponents(fullAddress),
     new ActionRowBuilder().addComponents(country)
   );
 
@@ -411,9 +431,7 @@ function shippingModal() {
 }
 
 function qtyOtherModal(category, sku, size, color) {
-  const modal = new ModalBuilder()
-    .setCustomId(`qty_other_modal:${category}:${sku}:${size}:${color}`)
-    .setTitle("Quantity");
+  const modal = new ModalBuilder().setCustomId(`qty_other_modal:${category}:${sku}:${size}:${color}`).setTitle("Quantity");
 
   const qty = new TextInputBuilder()
     .setCustomId("qty")
@@ -451,38 +469,23 @@ async function createReceiptChannel(guild, user, orderId) {
     parent: category?.id || null,
     permissionOverwrites: [
       // @everyone denied
-      {
-        id: guild.roles.everyone.id,
-        deny: ["ViewChannel"],
-      },
+      { id: guild.roles.everyone.id, deny: ["ViewChannel"] },
       // customer allowed
-      {
-        id: user.id,
-        allow: ["ViewChannel", "SendMessages", "ReadMessageHistory"],
-      },
+      { id: user.id, allow: ["ViewChannel", "SendMessages", "ReadMessageHistory"] },
       // staff role allowed
-      {
-        id: STAFF_ROLE_ID,
-        allow: ["ViewChannel", "SendMessages", "ReadMessageHistory"],
-      },
+      { id: STAFF_ROLE_ID, allow: ["ViewChannel", "SendMessages", "ReadMessageHistory"] },
       // bot allowed
-      {
-        id: guild.members.me.id,
-        allow: ["ViewChannel", "SendMessages", "ReadMessageHistory", "ManageChannels"],
-      },
+      { id: guild.members.me.id, allow: ["ViewChannel", "SendMessages", "ReadMessageHistory", "ManageChannels"] },
     ],
   });
 
   return channel;
 }
 
-// ✅ NEW: helper to format bank details nicely
+// helper to format bank details nicely
 function bankDetailsText(orderId) {
   const ref = `ORDER-${orderId}`;
-  const extras = [
-    BANK_IBAN ? `IBAN: ${BANK_IBAN}` : null,
-    BANK_SWIFT ? `SWIFT/BIC: ${BANK_SWIFT}` : null,
-  ].filter(Boolean);
+  const extras = [BANK_IBAN ? `IBAN: ${BANK_IBAN}` : null, BANK_SWIFT ? `SWIFT/BIC: ${BANK_SWIFT}` : null].filter(Boolean);
 
   return (
     `**Bank:** ${BANK_BANK_NAME}\n` +
@@ -500,7 +503,7 @@ function receiptEmbed(orderId, items, subtotal, shipping, total, shippingProfile
   );
 
   return new EmbedBuilder()
-    .setTitle(`Clothing Shop — Receipt (Order #${orderId})`)
+    .setTitle(`${STORE_NAME} — Receipt (Order #${orderId})`)
     .setDescription(lines.join("\n") || "_No items_")
     .addFields(
       { name: "Subtotal", value: money(subtotal), inline: true },
@@ -508,9 +511,13 @@ function receiptEmbed(orderId, items, subtotal, shipping, total, shippingProfile
       { name: "Total", value: money(total), inline: true },
       {
         name: "Shipping to",
-        value: `${shippingProfile.full_name}\n${shippingProfile.address}\n${shippingProfile.city}\n${shippingProfile.postcode}\n${shippingProfile.country}`,
+        value:
+          `${shippingProfile.full_name}\n` +
+          `${shippingProfile.email}\n` +
+          `${shippingProfile.phone}\n` +
+          `${shippingProfile.full_address}\n` +
+          `${shippingProfile.country}`,
       },
-      // ✅ NEW: payment instructions + bank details
       {
         name: "Payment — Bank Transfer",
         value:
@@ -525,12 +532,7 @@ function receiptEmbed(orderId, items, subtotal, shipping, total, shippingProfile
 function staffReceiptControls(orderId) {
   return [
     new ActionRowBuilder().addComponents(
-      // ✅ CHANGE: remove "Add payment link" button from UI, keep "Mark as paid"
-      // (Old paylink handler remains in the code in case you ever want it again.)
-      new ButtonBuilder()
-        .setCustomId(`staff_mark_paid:${orderId}`)
-        .setLabel("Mark as paid ✅")
-        .setStyle(ButtonStyle.Success)
+      new ButtonBuilder().setCustomId(`staff_mark_paid:${orderId}`).setLabel("Mark as paid ✅").setStyle(ButtonStyle.Success)
     ),
   ];
 }
@@ -548,7 +550,7 @@ client.on("interactionCreate", async (interaction) => {
         const menuChannel = await client.channels.fetch(MENU_CHANNEL_ID);
 
         const content =
-          `**Welcome to Clothing Shop!**\n\n` +
+          `**Welcome to ${STORE_NAME}!**\n\n` +
           `**How it works:**\n` +
           `1) Click the button below to get started\n` +
           `2) Enter your shipping details\n` +
@@ -637,7 +639,7 @@ client.on("interactionCreate", async (interaction) => {
         // Fetch shipping/profile
         const profileRes = await pool.query(
           `
-          SELECT up.full_name, sp.address, sp.city, sp.postcode, sp.country
+          SELECT up.full_name, up.email, up.phone, sp.full_address, sp.country
           FROM user_profiles up
           JOIN shipping_profiles sp ON sp.user_id = up.user_id
           WHERE up.user_id = $1
@@ -660,16 +662,19 @@ client.on("interactionCreate", async (interaction) => {
         // Create order
         const orderRes = await pool.query(
           `
-          INSERT INTO orders (user_id, full_name, address, city, postcode, country, subtotal_pence, shipping_pence, total_pence, status)
+          INSERT INTO orders (
+            user_id, full_name, email, phone, full_address, country,
+            subtotal_pence, shipping_pence, total_pence, status
+          )
           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending')
           RETURNING order_id
           `,
           [
             interaction.user.id,
             shippingProfile.full_name,
-            shippingProfile.address,
-            shippingProfile.city,
-            shippingProfile.postcode,
+            shippingProfile.email,
+            shippingProfile.phone,
+            shippingProfile.full_address,
             shippingProfile.country,
             subtotal,
             shipping,
@@ -800,16 +805,16 @@ client.on("interactionCreate", async (interaction) => {
 
       if (customId === "shipping_modal") {
         const full_name = interaction.fields.getTextInputValue("full_name")?.trim();
-        const address = interaction.fields.getTextInputValue("address")?.trim();
-        const city = interaction.fields.getTextInputValue("city")?.trim();
-        const postcode = interaction.fields.getTextInputValue("postcode")?.trim();
+        const email = interaction.fields.getTextInputValue("email")?.trim();
+        const phone = interaction.fields.getTextInputValue("phone")?.trim();
+        const full_address = interaction.fields.getTextInputValue("full_address")?.trim();
         const country = interaction.fields.getTextInputValue("country")?.trim();
 
-        if (!full_name || !address || !city || !postcode || !country) {
+        if (!full_name || !email || !phone || !full_address || !country) {
           return interaction.reply({ content: "All fields are required.", ephemeral: true });
         }
 
-        await upsertProfile(interaction.user.id, full_name, { address, city, postcode, country });
+        await upsertProfile(interaction.user.id, full_name, email, phone, { full_address, country });
 
         // After shipping saved, show categories
         return interaction.reply({
@@ -874,9 +879,7 @@ client.on("interactionCreate", async (interaction) => {
 
         await pool.query(`UPDATE orders SET payment_url=$1, status='awaiting_payment' WHERE order_id=$2`, [url, orderId]);
 
-        const payRow = new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setLabel("Pay now").setStyle(ButtonStyle.Link).setURL(url)
-        );
+        const payRow = new ActionRowBuilder().addComponents(new ButtonBuilder().setLabel("Pay now").setStyle(ButtonStyle.Link).setURL(url));
 
         await interaction.reply({ content: `✅ Payment link set for Order #${orderId}.`, ephemeral: true });
         await interaction.channel.send({
