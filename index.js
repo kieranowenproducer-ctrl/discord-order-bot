@@ -6,20 +6,9 @@
 // CHANGE: Bank transfer details shown in receipt channel instead of staff adding a payment link
 // NOTE: "Mark as paid" button is kept, and the old paylink code is kept (just not surfaced in UI)
 
-// ✅ CHANGES APPLIED (per your instructions):
-// 1) Store name updated everywhere: "Bodymarket Labs"
-// 2) Shipping form modal includes REQUIRED Email + Phone (5 input limit respected)
-//    - Full Name (required)
-//    - Email (required)
-//    - Phone (required)
-//    - Provide Full Address (required)
-//    - Country (required, kept last)
-// 3) Catalog replaced with placeholder items (Item A, Item B, etc.) while keeping your category structure + pricing + DUE IN notes.
-// 4) Shipping is now calculated from the Country field:
-//    - UK: £10
-//    - Europe: £30
-//    - USA: £45
-//    (Fallback: Europe)
+// ✅ CHANGE IN THIS VERSION:
+// Removed the two unnecessary “Standard” dropdowns by removing the size + colour selection steps.
+// Flow is now: Category -> Item -> Quantity (1–5 / Other)
 
 const {
   Client,
@@ -51,8 +40,8 @@ const DATABASE_URL = process.env.DATABASE_URL;
 const GUILD_ID = process.env.GUILD_ID;
 const MENU_CHANNEL_ID = process.env.MENU_CHANNEL_ID;
 
-const ORDERS_CATEGORY_ID = process.env.ORDERS_CATEGORY_ID; // category where private receipt channels are created
-const ORDERS_CHANNEL_ID = process.env.ORDERS_CHANNEL_ID; // optional (not required for this version)
+const ORDERS_CATEGORY_ID = process.env.ORDERS_CATEGORY_ID;
+const ORDERS_CHANNEL_ID = process.env.ORDERS_CHANNEL_ID; // optional (not required)
 const STAFF_ROLE_ID = process.env.STAFF_ROLE_ID;
 
 // Bank details via env vars so you don't hardcode in GitHub
@@ -63,8 +52,11 @@ const BANK_BANK_NAME = process.env.BANK_BANK_NAME || "YOUR BANK";
 const BANK_IBAN = process.env.BANK_IBAN || ""; // optional
 const BANK_SWIFT = process.env.BANK_SWIFT || ""; // optional
 
-// Store branding
 const STORE_NAME = "Bodymarket Labs";
+
+// Since we removed size/colour selection, we keep these fixed to avoid changing DB schema/logic.
+const DEFAULT_SIZE = "Standard";
+const DEFAULT_COLOR = "Standard";
 
 function requireEnv(name, value) {
   if (!value) throw new Error(`Missing required env var: ${name}`);
@@ -82,7 +74,6 @@ requireEnv("STAFF_ROLE_ID", STAFF_ROLE_ID);
 
 const pool = new Pool({
   connectionString: DATABASE_URL,
-  // Railway Postgres typically requires SSL in production
   ssl: process.env.NODE_ENV === "production" ? { rejectUnauthorized: false } : false,
 });
 
@@ -98,7 +89,6 @@ async function initDb() {
     );
   `);
 
-  // Backwards-compatible schema upgrade if table exists from older version
   await pool.query(`ALTER TABLE IF EXISTS user_profiles ADD COLUMN IF NOT EXISTS email TEXT;`);
   await pool.query(`ALTER TABLE IF EXISTS user_profiles ADD COLUMN IF NOT EXISTS phone TEXT;`);
 
@@ -258,11 +248,6 @@ const SHIPPING_UK_PENCE = 1000;
 const SHIPPING_EU_PENCE = 3000;
 const SHIPPING_USA_PENCE = 4500;
 
-// Simple country/region matcher from the "Country" field.
-// - UK/England/Scotland/Wales/NI/GB/Great Britain => UK rate
-// - USA/US/United States/America => USA rate
-// - Europe/EU or European country names => Europe rate
-// - Fallback => Europe rate
 function getShippingPenceForCountry(countryRaw) {
   const c = String(countryRaw || "").trim().toLowerCase();
   if (!c) return SHIPPING_EU_PENCE;
@@ -279,12 +264,7 @@ function getShippingPenceForCountry(countryRaw) {
 
   if (isUK) return SHIPPING_UK_PENCE;
 
-  const isUSA =
-    c.includes("usa") ||
-    c === "us" ||
-    c.includes("united states") ||
-    c.includes("america");
-
+  const isUSA = c.includes("usa") || c === "us" || c.includes("united states") || c.includes("america");
   if (isUSA) return SHIPPING_USA_PENCE;
 
   const europeKeywords = ["europe", "eu", "european"];
@@ -298,7 +278,6 @@ function getShippingPenceForCountry(countryRaw) {
     "russia"
   ]);
 
-  // Quick exact match or contains match for common variants
   for (const name of europeCountries) {
     if (c === name || c.includes(name)) return SHIPPING_EU_PENCE;
   }
@@ -320,64 +299,52 @@ async function getUserShippingProfile(userId) {
 }
 
 /* ----------------------------- SHOP CATALOG ----------------------------- */
-/*
-  IMPORTANT:
-  - You asked for placeholders (Item A, Item B, etc.) while keeping categories + pricing + DUE IN notes.
-  - The bot’s flow expects size + colour selections; to avoid changing the flow, each item uses:
-      sizes: ["Standard"]
-      colors: ["Standard"]
-*/
 
 const CATALOG = {
   "⭐ Best Sellers (Pens)": [
-    { sku: "A01", name: "Item A (30mg) — Pen", price_pence: 14000, sizes: ["Standard"], colors: ["Standard"] },
-    { sku: "A02", name: "Item B (40mg) — Pen [DUE IN]", price_pence: 16000, sizes: ["Standard"], colors: ["Standard"] },
-    { sku: "A03", name: "Item C (40mg) — Pen", price_pence: 11000, sizes: ["Standard"], colors: ["Standard"] },
+    { sku: "A01", name: "Item A (30mg) — Pen", price_pence: 14000, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
+    { sku: "A02", name: "Item B (40mg) — Pen [DUE IN]", price_pence: 16000, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
+    { sku: "A03", name: "Item C (40mg) — Pen", price_pence: 11000, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
   ],
-
   "💉 Premium Pens": [
-    { sku: "B01", name: "Item D (1000mg)", price_pence: 13000, sizes: ["Standard"], colors: ["Standard"] },
-    { sku: "B02", name: "Item E (20mg / 20mg) [DUE IN]", price_pence: 11500, sizes: ["Standard"], colors: ["Standard"] },
-    { sku: "B03", name: "Item F (70mg) [DUE IN]", price_pence: 10000, sizes: ["Standard"], colors: ["Standard"] },
+    { sku: "B01", name: "Item D (1000mg)", price_pence: 13000, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
+    { sku: "B02", name: "Item E (20mg / 20mg) [DUE IN]", price_pence: 11500, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
+    { sku: "B03", name: "Item F (70mg) [DUE IN]", price_pence: 10000, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
   ],
-
   "🧬 Peptides (Vials)": [
-    { sku: "C01", name: "Item G (30mg)", price_pence: 8500, sizes: ["Standard"], colors: ["Standard"] },
-    { sku: "C02", name: "Item H (40mg) [DUE IN]", price_pence: 7500, sizes: ["Standard"], colors: ["Standard"] },
-    { sku: "C03", name: "Item I (10mg)", price_pence: 4000, sizes: ["Standard"], colors: ["Standard"] },
-    { sku: "C04", name: "Item J (40mg) [DUE IN]", price_pence: 4500, sizes: ["Standard"], colors: ["Standard"] },
-    { sku: "C05", name: "Item K (10mg)", price_pence: 2000, sizes: ["Standard"], colors: ["Standard"] },
-    { sku: "C06", name: "Item L (10mg)", price_pence: 1500, sizes: ["Standard"], colors: ["Standard"] },
+    { sku: "C01", name: "Item G (30mg)", price_pence: 8500, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
+    { sku: "C02", name: "Item H (40mg) [DUE IN]", price_pence: 7500, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
+    { sku: "C03", name: "Item I (10mg)", price_pence: 4000, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
+    { sku: "C04", name: "Item J (40mg) [DUE IN]", price_pence: 4500, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
+    { sku: "C05", name: "Item K (10mg)", price_pence: 2000, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
+    { sku: "C06", name: "Item L (10mg)", price_pence: 1500, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
   ],
-
   "👑 Injectables (Oils)": [
-    { sku: "D01", name: "Item M (400mg)", price_pence: 3500, sizes: ["Standard"], colors: ["Standard"] },
-    { sku: "D02", name: "Item N (300mg / 250mg)", price_pence: 3000, sizes: ["Standard"], colors: ["Standard"] },
-    { sku: "D03", name: "Item O (300mg)", price_pence: 3000, sizes: ["Standard"], colors: ["Standard"] },
-    { sku: "D04", name: "Item P (330mg / 150mg)", price_pence: 3500, sizes: ["Standard"], colors: ["Standard"] },
-    { sku: "D05", name: "Item Q (Blend 200)", price_pence: 3500, sizes: ["Standard"], colors: ["Standard"] },
-    { sku: "D06", name: "Item R (100iu)", price_pence: 12000, sizes: ["Standard"], colors: ["Standard"] },
+    { sku: "D01", name: "Item M (400mg)", price_pence: 3500, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
+    { sku: "D02", name: "Item N (300mg / 250mg)", price_pence: 3000, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
+    { sku: "D03", name: "Item O (300mg)", price_pence: 3000, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
+    { sku: "D04", name: "Item P (330mg / 150mg)", price_pence: 3500, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
+    { sku: "D05", name: "Item Q (Blend 200)", price_pence: 3500, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
+    { sku: "D06", name: "Item R (100iu)", price_pence: 12000, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
   ],
-
   "💊 Health & Performance": [
-    { sku: "E01", name: "Item S (100 tabs)", price_pence: 3500, sizes: ["Standard"], colors: ["Standard"] },
-    { sku: "E02", name: "Item T (Individual strip)", price_pence: 1000, sizes: ["Standard"], colors: ["Standard"] },
-    { sku: "E03", name: "Item U (100 tabs)", price_pence: 3500, sizes: ["Standard"], colors: ["Standard"] },
-    { sku: "E04", name: "Item V (Jelly)", price_pence: 1000, sizes: ["Standard"], colors: ["Standard"] },
-    { sku: "E05", name: "Item W (5000iu)", price_pence: 2500, sizes: ["Standard"], colors: ["Standard"] },
-    { sku: "E06", name: "Item X (150iu)", price_pence: 3000, sizes: ["Standard"], colors: ["Standard"] },
-    { sku: "E07", name: "Item Y (PCT pack)", price_pence: 2500, sizes: ["Standard"], colors: ["Standard"] },
-    { sku: "E08", name: "Item Z (20mg / 100 tabs)", price_pence: 4500, sizes: ["Standard"], colors: ["Standard"] },
-    { sku: "E09", name: "Item AA (B12 injections 10x1)", price_pence: 2000, sizes: ["Standard"], colors: ["Standard"] },
+    { sku: "E01", name: "Item S (100 tabs)", price_pence: 3500, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
+    { sku: "E02", name: "Item T (Individual strip)", price_pence: 1000, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
+    { sku: "E03", name: "Item U (100 tabs)", price_pence: 3500, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
+    { sku: "E04", name: "Item V (Jelly)", price_pence: 1000, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
+    { sku: "E05", name: "Item W (5000iu)", price_pence: 2500, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
+    { sku: "E06", name: "Item X (150iu)", price_pence: 3000, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
+    { sku: "E07", name: "Item Y (PCT pack)", price_pence: 2500, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
+    { sku: "E08", name: "Item Z (20mg / 100 tabs)", price_pence: 4500, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
+    { sku: "E09", name: "Item AA (B12 injections 10x1)", price_pence: 2000, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
   ],
-
   "💤 Pain & Sleep": [
-    { sku: "F01", name: "Item AB (10mg / 140 tabs)", price_pence: 4500, sizes: ["Standard"], colors: ["Standard"] },
-    { sku: "F02", name: "Item AB (Bundle: 5 for £200)", price_pence: 20000, sizes: ["Standard"], colors: ["Standard"] },
-    { sku: "F03", name: "Item AC (10mg) — 1 sleeve", price_pence: 1000, sizes: ["Standard"], colors: ["Standard"] },
-    { sku: "F04", name: "Item AC (10mg) — 3 sleeves", price_pence: 2500, sizes: ["Standard"], colors: ["Standard"] },
-    { sku: "F05", name: "Item AD (300mg / 150 tabs)", price_pence: 4500, sizes: ["Standard"], colors: ["Standard"] },
-    { sku: "F06", name: "Item AE (50mg / 100 tabs)", price_pence: 4500, sizes: ["Standard"], colors: ["Standard"] },
+    { sku: "F01", name: "Item AB (10mg / 140 tabs)", price_pence: 4500, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
+    { sku: "F02", name: "Item AB (Bundle: 5 for £200)", price_pence: 20000, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
+    { sku: "F03", name: "Item AC (10mg) — 1 sleeve", price_pence: 1000, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
+    { sku: "F04", name: "Item AC (10mg) — 3 sleeves", price_pence: 2500, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
+    { sku: "F05", name: "Item AD (300mg / 150 tabs)", price_pence: 4500, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
+    { sku: "F06", name: "Item AE (50mg / 100 tabs)", price_pence: 4500, sizes: [DEFAULT_SIZE], colors: [DEFAULT_COLOR] },
   ],
 };
 
@@ -410,7 +377,6 @@ const commands = [
     .setName("setupshop")
     .setDescription("Post/refresh the shop menu message in the menu channel")
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-
   new SlashCommandBuilder().setName("ping").setDescription("Health check"),
 ].map((c) => c.toJSON());
 
@@ -422,78 +388,69 @@ async function registerCommands() {
 /* ------------------------------ UI BUILDERS ------------------------------ */
 
 function menuMessageComponents() {
-  const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId("open_menu").setLabel("Click to see our menu").setStyle(ButtonStyle.Primary)
-  );
-  return [row];
+  return [
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId("open_menu").setLabel("Click to see our menu").setStyle(ButtonStyle.Primary)
+    ),
+  ];
 }
 
 function categorySelectComponents() {
-  const row = new ActionRowBuilder().addComponents(
-    new StringSelectMenuBuilder().setCustomId("select_category").setPlaceholder("Choose a category…").addOptions(categoryOptions)
-  );
-  return [row];
+  return [
+    new ActionRowBuilder().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId("select_category")
+        .setPlaceholder("Choose a category…")
+        .addOptions(categoryOptions)
+    ),
+  ];
 }
 
 function itemSelectComponents(category) {
   const items = CATALOG[category] || [];
-  const row = new ActionRowBuilder().addComponents(
-    new StringSelectMenuBuilder()
-      .setCustomId(`select_item:${category}`)
-      .setPlaceholder("Choose an item…")
-      .addOptions(
-        items.map((it) => ({
-          label: `${it.name} — ${money(it.price_pence)}`,
-          value: it.sku,
-        }))
-      )
-  );
-  return [row];
+  return [
+    new ActionRowBuilder().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId(`select_item:${category}`)
+        .setPlaceholder("Choose an item…")
+        .addOptions(
+          items.map((it) => ({
+            label: `${it.name} — ${money(it.price_pence)}`,
+            value: it.sku,
+          }))
+        )
+    ),
+  ];
 }
 
-function sizeSelectComponents(category, sku) {
-  const item = (CATALOG[category] || []).find((x) => x.sku === sku);
-  const row = new ActionRowBuilder().addComponents(
-    new StringSelectMenuBuilder()
-      .setCustomId(`select_size:${category}:${sku}`)
-      .setPlaceholder("Choose an option…")
-      .addOptions(item.sizes.map((s) => ({ label: s, value: s })))
-  );
-  return [row];
-}
-
-function colorSelectComponents(category, sku, size) {
-  const item = (CATALOG[category] || []).find((x) => x.sku === sku);
-  const row = new ActionRowBuilder().addComponents(
-    new StringSelectMenuBuilder()
-      .setCustomId(`select_color:${category}:${sku}:${size}`)
-      .setPlaceholder("Choose an option…")
-      .addOptions(item.colors.map((c) => ({ label: c, value: c })))
-  );
-  return [row];
-}
-
-function qtyButtonsComponents(category, sku, size, color) {
+function qtyButtonsComponents(category, sku) {
   const row1 = new ActionRowBuilder().addComponents(
     ...[1, 2, 3, 4, 5].map((n) =>
-      new ButtonBuilder().setCustomId(`add_qty:${category}:${sku}:${size}:${color}:${n}`).setLabel(String(n)).setStyle(ButtonStyle.Secondary)
+      new ButtonBuilder()
+        .setCustomId(`add_qty:${category}:${sku}:${n}`)
+        .setLabel(String(n))
+        .setStyle(ButtonStyle.Secondary)
     )
   );
 
   const row2 = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(`add_qty_other:${category}:${sku}:${size}:${color}`).setLabel("Other…").setStyle(ButtonStyle.Primary)
+    new ButtonBuilder()
+      .setCustomId(`add_qty_other:${category}:${sku}`)
+      .setLabel("Other…")
+      .setStyle(ButtonStyle.Primary)
   );
 
   return [row1, row2];
 }
 
 function cartActionsComponents() {
-  const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId("cart_add_more").setLabel("Add Another Item").setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId("cart_submit").setLabel("Submit Order ✅").setStyle(ButtonStyle.Success),
-    new ButtonBuilder().setCustomId("cart_clear").setLabel("Clear Cart").setStyle(ButtonStyle.Danger)
-  );
-  return [row];
+  return [
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId("cart_add_more").setLabel("Add Another Item").setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId("cart_submit").setLabel("Submit Order ✅").setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId("cart_clear").setLabel("Clear Cart").setStyle(ButtonStyle.Danger)
+    ),
+  ];
 }
 
 /* -------------------------- MODALS (MAX 5 INPUTS) ------------------------- */
@@ -501,11 +458,23 @@ function cartActionsComponents() {
 function shippingModal() {
   const modal = new ModalBuilder().setCustomId("shipping_modal").setTitle("Shipping details");
 
-  const fullName = new TextInputBuilder().setCustomId("full_name").setLabel("Full name").setStyle(TextInputStyle.Short).setRequired(true);
+  const fullName = new TextInputBuilder()
+    .setCustomId("full_name")
+    .setLabel("Full name")
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true);
 
-  const email = new TextInputBuilder().setCustomId("email").setLabel("Email").setStyle(TextInputStyle.Short).setRequired(true);
+  const email = new TextInputBuilder()
+    .setCustomId("email")
+    .setLabel("Email")
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true);
 
-  const phone = new TextInputBuilder().setCustomId("phone").setLabel("Phone number").setStyle(TextInputStyle.Short).setRequired(true);
+  const phone = new TextInputBuilder()
+    .setCustomId("phone")
+    .setLabel("Phone number")
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true);
 
   const fullAddress = new TextInputBuilder()
     .setCustomId("full_address")
@@ -513,23 +482,31 @@ function shippingModal() {
     .setStyle(TextInputStyle.Paragraph)
     .setRequired(true);
 
-  const country = new TextInputBuilder().setCustomId("country").setLabel("Country").setStyle(TextInputStyle.Short).setRequired(true);
+  const country = new TextInputBuilder()
+    .setCustomId("country")
+    .setLabel("Country")
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true);
 
   modal.addComponents(
     new ActionRowBuilder().addComponents(fullName),
     new ActionRowBuilder().addComponents(email),
     new ActionRowBuilder().addComponents(phone),
     new ActionRowBuilder().addComponents(fullAddress),
-    new ActionRowBuilder().addComponents(country) // keep last
+    new ActionRowBuilder().addComponents(country)
   );
 
   return modal;
 }
 
-function qtyOtherModal(category, sku, size, color) {
-  const modal = new ModalBuilder().setCustomId(`qty_other_modal:${category}:${sku}:${size}:${color}`).setTitle("Quantity");
+function qtyOtherModal(category, sku) {
+  const modal = new ModalBuilder().setCustomId(`qty_other_modal:${category}:${sku}`).setTitle("Quantity");
 
-  const qty = new TextInputBuilder().setCustomId("qty").setLabel("Enter quantity (number)").setStyle(TextInputStyle.Short).setRequired(true);
+  const qty = new TextInputBuilder()
+    .setCustomId("qty")
+    .setLabel("Enter quantity (number)")
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true);
 
   modal.addComponents(new ActionRowBuilder().addComponents(qty));
   return modal;
@@ -560,10 +537,10 @@ async function createReceiptChannel(guild, user, orderId) {
     type: ChannelType.GuildText,
     parent: category?.id || null,
     permissionOverwrites: [
-      { id: guild.roles.everyone.id, deny: ["ViewChannel"] }, // @everyone denied
-      { id: user.id, allow: ["ViewChannel", "SendMessages", "ReadMessageHistory"] }, // customer allowed
-      { id: STAFF_ROLE_ID, allow: ["ViewChannel", "SendMessages", "ReadMessageHistory"] }, // staff role allowed
-      { id: guild.members.me.id, allow: ["ViewChannel", "SendMessages", "ReadMessageHistory", "ManageChannels"] }, // bot allowed
+      { id: guild.roles.everyone.id, deny: ["ViewChannel"] },
+      { id: user.id, allow: ["ViewChannel", "SendMessages", "ReadMessageHistory"] },
+      { id: STAFF_ROLE_ID, allow: ["ViewChannel", "SendMessages", "ReadMessageHistory"] },
+      { id: guild.members.me.id, allow: ["ViewChannel", "SendMessages", "ReadMessageHistory", "ManageChannels"] },
     ],
   });
 
@@ -612,14 +589,10 @@ function receiptEmbed(orderId, items, subtotal, shipping, total, shippingProfile
           `Once paid, a staff member will confirm and mark the order as paid.\n\n` +
           bankDetailsText(orderId),
       },
-      {
-        name: "Dispatch",
-        value: "Cut-off: **15:30 (Mon–Fri Dispatch)**",
-      },
+      { name: "Dispatch", value: "Cut-off: **15:30 (Mon–Fri Dispatch)**" },
       {
         name: "Overseas disclaimer",
-        value:
-          "Shipping is at your own risk. No reships or refunds for customs seizures. By ordering, you accept these terms.",
+        value: "Shipping is at your own risk. No reships or refunds for customs seizures. By ordering, you accept these terms.",
       }
     )
     .setFooter({ text: "Pay by bank transfer using the reference shown above." });
@@ -658,7 +631,6 @@ client.on("interactionCreate", async (interaction) => {
           `Once submitted, you'll receive a **private receipt channel** with **bank transfer details** to pay.`;
 
         await menuChannel.send({ content, components: menuMessageComponents() });
-
         return interaction.reply({ content: "✅ Shop menu message posted/refreshed in the menu channel.", ephemeral: true });
       }
     }
@@ -673,7 +645,7 @@ client.on("interactionCreate", async (interaction) => {
       }
 
       if (customId.startsWith("add_qty:")) {
-        const [, category, sku, size, color, qtyStr] = customId.split(":");
+        const [, category, sku, qtyStr] = customId.split(":");
         const qty = parseInt(qtyStr, 10);
 
         const item = (CATALOG[category] || []).find((x) => x.sku === sku);
@@ -682,15 +654,14 @@ client.on("interactionCreate", async (interaction) => {
         await addCartItem(interaction.user.id, {
           sku: item.sku,
           name: item.name,
-          size,
-          color,
+          size: DEFAULT_SIZE,
+          color: DEFAULT_COLOR,
           qty,
           price_pence: item.price_pence,
         });
 
         const cart = await getCartSummary(interaction.user.id);
 
-        // Shipping depends on country (we should have it already because shipping modal comes first)
         const profile = await getUserShippingProfile(interaction.user.id);
         const shippingPence = getShippingPenceForCountry(profile?.country);
 
@@ -712,8 +683,8 @@ client.on("interactionCreate", async (interaction) => {
       }
 
       if (customId.startsWith("add_qty_other:")) {
-        const [, category, sku, size, color] = customId.split(":");
-        return interaction.showModal(qtyOtherModal(category, sku, size, color));
+        const [, category, sku] = customId.split(":");
+        return interaction.showModal(qtyOtherModal(category, sku));
       }
 
       if (customId === "cart_add_more") {
@@ -830,32 +801,23 @@ client.on("interactionCreate", async (interaction) => {
 
       if (customId === "select_category") {
         const category = interaction.values[0];
-        return interaction.reply({ content: `Now choose an item:`, components: itemSelectComponents(category), ephemeral: true });
+        return interaction.reply({
+          content: "Now choose an item:",
+          components: itemSelectComponents(category),
+          ephemeral: true,
+        });
       }
 
       if (customId.startsWith("select_item:")) {
         const [, category] = customId.split(":");
         const sku = interaction.values[0];
 
-        return interaction.reply({ content: `Selected item. Choose an option:`, components: sizeSelectComponents(category, sku), ephemeral: true });
-      }
-
-      if (customId.startsWith("select_size:")) {
-        const [, category, sku] = customId.split(":");
-        const size = interaction.values[0];
-
+        // ✅ DIRECTLY GO TO QUANTITY (removes the two unnecessary dropdowns)
         return interaction.reply({
-          content: `Option **${size}** selected. Choose an option:`,
-          components: colorSelectComponents(category, sku, size),
+          content: "Selected item — how many?",
+          components: qtyButtonsComponents(category, sku),
           ephemeral: true,
         });
-      }
-
-      if (customId.startsWith("select_color:")) {
-        const [, category, sku, size] = customId.split(":");
-        const color = interaction.values[0];
-
-        return interaction.reply({ content: `Option **${color}** selected — how many?`, components: qtyButtonsComponents(category, sku, size, color), ephemeral: true });
       }
     }
 
@@ -877,11 +839,15 @@ client.on("interactionCreate", async (interaction) => {
 
         await upsertProfile(interaction.user.id, full_name, email, phone, { full_address, country });
 
-        return interaction.reply({ content: "✅ Details saved. Choose a category:", components: categorySelectComponents(), ephemeral: true });
+        return interaction.reply({
+          content: "✅ Details saved. Choose a category:",
+          components: categorySelectComponents(),
+          ephemeral: true,
+        });
       }
 
       if (customId.startsWith("qty_other_modal:")) {
-        const [, category, sku, size, color] = customId.split(":");
+        const [, category, sku] = customId.split(":");
         const qtyRaw = interaction.fields.getTextInputValue("qty");
         const qty = parseInt(qtyRaw, 10);
 
@@ -895,8 +861,8 @@ client.on("interactionCreate", async (interaction) => {
         await addCartItem(interaction.user.id, {
           sku: item.sku,
           name: item.name,
-          size,
-          color,
+          size: DEFAULT_SIZE,
+          color: DEFAULT_COLOR,
           qty,
           price_pence: item.price_pence,
         });
@@ -938,7 +904,9 @@ client.on("interactionCreate", async (interaction) => {
 
         await pool.query(`UPDATE orders SET payment_url=$1, status='awaiting_payment' WHERE order_id=$2`, [url, orderId]);
 
-        const payRow = new ActionRowBuilder().addComponents(new ButtonBuilder().setLabel("Pay now").setStyle(ButtonStyle.Link).setURL(url));
+        const payRow = new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setLabel("Pay now").setStyle(ButtonStyle.Link).setURL(url)
+        );
 
         await interaction.reply({ content: `✅ Payment link set for Order #${orderId}.`, ephemeral: true });
         await interaction.channel.send({
