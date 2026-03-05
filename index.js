@@ -300,10 +300,10 @@ async function getUserShippingProfile(userId) {
 /* ----------------------------- SHOP CATALOG ----------------------------- */
 
 const CATALOG = {
-  "⭐ Best Sellers (Pens)": [
-    { sku: "A01", name: "Item A (30mg) — Pen", price_pence: 14000 },
-    { sku: "A02", name: "Item B (40mg) — Pen [DUE IN]", price_pence: 16000 },
-    { sku: "A03", name: "Item C (40mg) — Pen", price_pence: 11000 },
+  "⭐ Best Sellers (PENS)": [
+    { sku: "A01", name: "REMEDIUM Research RETA PEN (30mg)", price_pence: 14000 },
+    { sku: "A02", name: "APEX Pharma RETA PEN (40mg) [DUE IN]", price_pence: 16000 },
+    { sku: "A03", name: "ALLUVI TIRZEPATIDE PEN (40mg)", price_pence: 11000 },
   ],
   "💉 Premium Pens": [
     { sku: "B01", name: "Item D (1000mg)", price_pence: 13000 },
