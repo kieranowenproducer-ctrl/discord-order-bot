@@ -300,33 +300,33 @@ async function getUserShippingProfile(userId) {
 /* ----------------------------- SHOP CATALOG ----------------------------- */
 
 const CATALOG = {
-  "⭐ Best Sellers (PENS)": [
-    { sku: "A01", name: "REMEDIUM Research RETA PEN (30mg)", price_pence: 14000 },
-    { sku: "A02", name: "APEX Pharma RETA PEN (40mg) [DUE IN]", price_pence: 16000 },
-    { sku: "A03", name: "ALLUVI TIRZEPATIDE PEN (40mg)", price_pence: 11000 },
+  "​⭐ BEST SELLERS (PENS)": [
+    { sku: "A01", name: "🖊️ REMEDIUM Research RETA PEN (30mg)", price_pence: 14000 },
+    { sku: "A02", name: "​🖊️ APEX Pharma RETA PEN (40mg) [DUE IN]", price_pence: 16000 },
+    { sku: "A03", name: "🖊️ ALLUVI TIRZEPATIDE PEN (40mg)", price_pence: 11000 },
   ],
-  "💉 Premium Pens": [
-    { sku: "B01", name: "Item D (1000mg)", price_pence: 13000 },
-    { sku: "B02", name: "Item E (20mg / 20mg) [DUE IN]", price_pence: 11500 },
-    { sku: "B03", name: "Item F (70mg) [DUE IN]", price_pence: 10000 },
+  "​💉 ALLUVI PREMIUM PENS": [
+    { sku: "B01", name: "⚡ NAD+ (1000mg)", price_pence: 13000 },
+    { sku: "B02", name: "​🐺 Wolverine Stack (BPC-157 20mg / TB-500 20mg) [DUE IN]", price_pence: 11500 },
+    { sku: "B03", name: "​✨ GLOW (GHK-CU + BPC-157 + TB-500) 70mg [DUE IN]", price_pence: 10000 },
   ],
-  "🧬 Peptides (Vials)": [
-    { sku: "C01", name: "Item G (30mg)", price_pence: 8500 },
-    { sku: "C02", name: "Item H (40mg) [DUE IN]", price_pence: 7500 },
-    { sku: "C03", name: "Item I (10mg)", price_pence: 4000 },
-    { sku: "C04", name: "Item J (40mg) [DUE IN]", price_pence: 4500 },
-    { sku: "C05", name: "Item K (10mg)", price_pence: 2000 },
-    { sku: "C06", name: "Item L (10mg)", price_pence: 1500 },
+  "​🧬 PEPTIDES (VIALS)": [
+    { sku: "C01", name: "​🧪 Retatrutide (30mg)", price_pence: 8500 },
+    { sku: "C02", name: "​🧪 Tirzepatide (40mg) [DUE IN]", price_pence: 7500 },
+    { sku: "C03", name: "🧪 Tesamorelin (10mg)", price_pence: 4000 },
+    { sku: "C04", name: "​🧪 MOTS-C (40mg) [DUE IN]", price_pence: 4500 },
+    { sku: "C05", name: "​🧪 BPC-157 (10mg)", price_pence: 2000 },
+    { sku: "C06", name: "​🧪 PT-141 (10mg)", price_pence: 1500 },
   ],
-  "👑 Injectables (Oils)": [
-    { sku: "D01", name: "Item M (400mg)", price_pence: 3500 },
-    { sku: "D02", name: "Item N (300mg / 250mg)", price_pence: 3000 },
-    { sku: "D03", name: "Item O (300mg)", price_pence: 3000 },
-    { sku: "D04", name: "Item P (330mg / 150mg)", price_pence: 3500 },
-    { sku: "D05", name: "Item Q (Blend 200)", price_pence: 3500 },
-    { sku: "D06", name: "Item R (100iu)", price_pence: 12000 },
+  "​👑 INJECTABLES (Crown Pharma Oils)": [
+    { sku: "D01", name: "​💉 Test 400mg", price_pence: 3500 },
+    { sku: "D02", name: "​💉 Test E 300mg / Test Cyp 250mg", price_pence: 3000 },
+    { sku: "D03", name: 💉 Sustanon 300mg", price_pence: 3000 },
+    { sku: "D04", name:  ​💉 Deca 330mg / NPP 150mg", price_pence: 3500 },
+    { sku: "D05", name: "🔥 RIP BLEND 200 (Prop/Tren/Mast)", price_pence: 3500 },
+    { sku: "D06", name: "​🧬 Platinum HGH (100iu)", price_pence: 12000 },
   ],
-  "💊 Health & Performance": [
+  ​💊 HEALTH & PERFORMANCE": [
     { sku: "E01", name: "Item S (100 tabs)", price_pence: 3500 },
     { sku: "E02", name: "Item T (Individual strip)", price_pence: 1000 },
     { sku: "E03", name: "Item U (100 tabs)", price_pence: 3500 },
