@@ -326,24 +326,30 @@ const CATALOG = {
     { sku: "D05", name: "🔥 RIP BLEND 200 (Prop/Tren/Mast)", price_pence: 3500 },
     { sku: "D06", name: "​🧬 Platinum HGH (100iu)", price_pence: 12000 },
   ],
-  "💊 HEALTH & PERFORMANCE": [​
-    { sku: "E01", name: "💙 Viagra (100 tabs)", price_pence: 3500 },
-    { sku: "E02", name: "💙 Viagra (Individual strip)", price_pence: 1000 },
-    { sku: "E03", name: "​💛 Cialis (100 tabs)", price_pence: 3500 },
-    { sku: "E04", name: "💛 Kamagra Jelly", price_pence: 1000 },
-    { sku: "E05", name: "​🛡️ HCG (5000iu)", price_pence: 2500 },
-    { sku: "E06", name: "​🛡️ HMG (150iu)", price_pence: 3000 },
-    { sku: "E07", name: "🛡️ PCT (Clomid/Tamoxifen)", price_pence: 2500 },
-    { sku: "E08", name: "🩹 Accutane (20mg/100 Tabs)", price_pence: 4500 },
-    { sku: "E09", name: "💉 B12 Injections (10x1)", price_pence: 2000 },
+  "STACKS": [
+    { sku: "D05", name: "RIP BLEND 200 (Prop/Tren/Mast)", price_pence: 3500, sizes: ["Standard"], colors: ["Default"] },
+    { sku: "D06", name: "Platinum HGH (100iu)", price_pence: 12000, sizes: ["Standard"], colors: ["Default"] },
   ],
-  "💤 PAIN & SLEEP": [
-    { sku: "F01", name: "​😴 Zopiclone (10mg / 140 tabs)", price_pence: 4500 },
-    { sku: "F02", name: "😴 Zopiclone (10mg / 700 Tabs)​", price_pence: 20000 },
-    { sku: "F03", name: "​😌 Diaz (10mg) — 1 sleeve", price_pence: 1000 },
-    { sku: "F04", name: "​😌 Diaz (10mg) — 3 sleeves", price_pence: 2500 },
-    { sku: "F05", name: "​🧠 Pregabalin (300mg / 150 Tabs)", price_pence: 4500 },
-    { sku: "F06", name: "🚫 Tramadol (50mg / 100 Tabs)", price_pence: 4500 },
+
+  "HEALTH & PERFORMANCE": [
+    { sku: "E01", name: "Viagra (100 tabs)", price_pence: 3500, sizes: ["Standard"], colors: ["Default"] },
+    { sku: "E02", name: "Viagra (Individual strip)", price_pence: 1000, sizes: ["Standard"], colors: ["Default"] },
+    { sku: "E03", name: "Cialis (100 tabs)", price_pence: 3500, sizes: ["Standard"], colors: ["Default"] },
+    { sku: "E04", name: "Kamagra Jelly", price_pence: 1000, sizes: ["Standard"], colors: ["Default"] },
+    { sku: "E05", name: "HCG (5000iu)", price_pence: 2500, sizes: ["Standard"], colors: ["Default"] },
+    { sku: "E06", name: "HMG (150iu)", price_pence: 3000, sizes: ["Standard"], colors: ["Default"] },
+    { sku: "E07", name: "PCT (Clomid/Tamoxifen)", price_pence: 2500, sizes: ["Standard"], colors: ["Default"] },
+    { sku: "E08", name: "Accutane (20mg/100 Tabs)", price_pence: 4500, sizes: ["Standard"], colors: ["Default"] },
+    { sku: "E09", name: "B12 Injections (10x1)", price_pence: 2000, sizes: ["Standard"], colors: ["Default"] },
+  ],
+
+  "PAIN & SLEEP": [
+    { sku: "F01", name: "Zopiclone (10mg / 140 tabs)", price_pence: 4500, sizes: ["Standard"], colors: ["Default"] },
+    { sku: "F02", name: "Zopiclone (10mg / 700 Tabs)", price_pence: 20000, sizes: ["Standard"], colors: ["Default"] },
+    { sku: "F03", name: "Diaz (10mg) - 1 sleeve", price_pence: 1000, sizes: ["Standard"], colors: ["Default"] },
+    { sku: "F04", name: "Diaz (10mg) - 3 sleeves", price_pence: 2500, sizes: ["Standard"], colors: ["Default"] },
+    { sku: "F05", name: "Pregabalin (300mg / 150 Tabs)", price_pence: 4500, sizes: ["Standard"], colors: ["Default"] },
+    { sku: "F06", name: "Tramadol (50mg / 100 Tabs)", price_pence: 4500, sizes: ["Standard"], colors: ["Default"] },
   ],
 };
 
