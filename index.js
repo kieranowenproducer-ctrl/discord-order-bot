@@ -326,7 +326,7 @@ const CATALOG = {
     { sku: "D05", name: "🔥 RIP BLEND 200 (Prop/Tren/Mast)", price_pence: 3500 },
     { sku: "D06", name: "​🧬 Platinum HGH (100iu)", price_pence: 12000 },
   ],
-  ​"💊 HEALTH & PERFORMANCE": [
+  "💊 HEALTH & PERFORMANCE": [​
     { sku: "E01", name: "💙 Viagra (100 tabs)", price_pence: 3500 },
     { sku: "E02", name: "💙 Viagra (Individual strip)", price_pence: 1000 },
     { sku: "E03", name: "​💛 Cialis (100 tabs)", price_pence: 3500 },
@@ -337,7 +337,7 @@ const CATALOG = {
     { sku: "E08", name: "🩹 Accutane (20mg/100 Tabs)", price_pence: 4500 },
     { sku: "E09", name: "💉 B12 Injections (10x1)", price_pence: 2000 },
   ],
-  "​💤 PAIN & SLEEP": [
+  "💤 PAIN & SLEEP": [
     { sku: "F01", name: "​😴 Zopiclone (10mg / 140 tabs)", price_pence: 4500 },
     { sku: "F02", name: "😴 Zopiclone (10mg / 700 Tabs)​", price_pence: 20000 },
     { sku: "F03", name: "​😌 Diaz (10mg) — 1 sleeve", price_pence: 1000 },
