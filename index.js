@@ -304,7 +304,6 @@ const CATALOG = {
     { sku: "A01", name: "🖊️ REMEDIUM Research RETA PEN (30mg)", price_pence: 14000 },
     { sku: "A02", name: "​🖊️ APEX Pharma RETA PEN (40mg) [DUE IN]", price_pence: 16000 },
     { sku: "A03", name: "🖊️ ALLUVI TIRZEPATIDE PEN (40mg)", price_pence: 11000 },
-    { sku: "A04", name: "🖊️ ALLUVI TIRZEPATIDE PEN TEST (40mg)", price_pence: 11000 },
   ],
   "​💉 ALLUVI PREMIUM PENS": [
     { sku: "B01", name: "⚡ NAD+ (1000mg)", price_pence: 13000 },
