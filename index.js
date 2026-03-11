@@ -326,10 +326,6 @@ const CATALOG = {
     { sku: "D05", name: "🔥 RIP BLEND 200 (Prop/Tren/Mast)", price_pence: 3500 },
     { sku: "D06", name: "​🧬 Platinum HGH (100iu)", price_pence: 12000 },
   ],
-  "STACKS": [
-    { sku: "D05", name: "RIP BLEND 200 (Prop/Tren/Mast)", price_pence: 3500, sizes: ["Standard"], colors: ["Default"] },
-    { sku: "D06", name: "Platinum HGH (100iu)", price_pence: 12000, sizes: ["Standard"], colors: ["Default"] },
-  ],
 
   "HEALTH & PERFORMANCE": [
     { sku: "E01", name: "Viagra (100 tabs)", price_pence: 3500, sizes: ["Standard"], colors: ["Default"] },
