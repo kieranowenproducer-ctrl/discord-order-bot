@@ -305,7 +305,7 @@ const CATALOG = {
     { sku: "A02", name: "​🖊️ APEX Pharma RETA PEN (40mg) [DUE IN]", price_pence: 16000 },
     { sku: "A03", name: "🖊️ ALLUVI TIRZEPATIDE PEN (40mg)", price_pence: 11000 },
   ],
-  "​💉 ALLUVI PREMIUM PENS": [
+  "​💉 PREMIUM PENS": [
     { sku: "B01", name: "⚡ NAD+ (1000mg)", price_pence: 13000 },
     { sku: "B02", name: "​🐺 Wolverine Stack (BPC-157 20mg / TB-500 20mg) [DUE IN]", price_pence: 11500 },
     { sku: "B03", name: "​✨ GLOW (GHK-CU + BPC-157 + TB-500) 70mg [DUE IN]", price_pence: 10000 },
