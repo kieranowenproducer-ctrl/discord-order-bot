@@ -244,7 +244,7 @@ function money(pence) {
 /* ----------------------------- SHIPPING LOGIC ---------------------------- */
 
 const SHIPPING_UK_PENCE = 1000;
-const SHIPPING_EU_PENCE = 3000;
+const SHIPPING_EU_PENCE = 3500;
 const SHIPPING_USA_PENCE = 4500;
 
 function getShippingPenceForCountry(countryRaw) {
