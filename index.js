@@ -668,7 +668,7 @@ client.on("interactionCreate", async (interaction) => {
           `3) Browse categories and select items\n` +
           `4) Add multiple items to your basket\n` +
           `5) Submit your order when you're done\n\n` +
-          `**Shipping:** UK Tracked £10 • Europe £30 • USA £45\n` +
+          `**Shipping:** UK Tracked £10 • Europe £35 • USA £45\n` +
           `**Cut-off:** 15:30 (Mon–Fri Dispatch)\n\n` +
           `Once submitted, you'll receive a **private receipt channel** with **bank transfer details** to pay.`;
 
