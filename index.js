@@ -331,7 +331,7 @@ const CATALOG = {
     { sku: "E07", name: "5-Amino-1MQ (10mg)", price_pence: 3000, sizes: ["Standard"], colors: ["Default"] },
     { sku: "E08", name: "SLU-PP-332 (5mg)", price_pence: 3500, sizes: ["Standard"], colors: ["Default"] },
   ],
-  "PAIN & SLEEP": [
+  "💤 PAIN & SLEEP": [
     { sku: "F01", name: "Melatonin 5mg (100 tabs)", price_pence: 1500, sizes: ["Standard"], colors: ["Default"] },
     { sku: "F02", name: "Zopiclone 10mg (140 tabs)", price_pence: 4500, sizes: ["Standard"], colors: ["Default"] },
     { sku: "F03", name: "Diaz (10 tabs) (10mg)", price_pence: 1000, sizes: ["Standard"], colors: ["Default"] },
@@ -339,6 +339,15 @@ const CATALOG = {
     { sku: "F05", name: "UK Pregabalin (150 caps) (300mg)", price_pence: 5000, sizes: ["Standard"], colors: ["Default"] },
     { sku: "F06", name: "UK Tramadol (100 tabs) (50mg)", price_pence: 6000, sizes: ["Standard"], colors: ["Default"] },
     { sku: "F07", name: "DHC Codeine UK Accord (100 tabs) (30mg)", price_pence: 6000, sizes: ["Standard"], colors: ["Default"] },
+  ],
+  "🧪 SPECIALIST": [
+    { sku: "G01", name: "IGF-1 LR3 (1mg)", price_pence: 4500, sizes: ["Standard"], colors: ["Default"] },
+    { sku: "G02", name: "Tesamorelin (20mg)", price_pence: 6500, sizes: ["Standard"], colors: ["Default"] },
+    { sku: "G03", name: "MOTS-C (40mg)", price_pence: 5500, sizes: ["Standard"], colors: ["Default"] },
+    { sku: "G04", name: "NAD+ (500mg)", price_pence: 4500, sizes: ["Standard"], colors: ["Default"] },
+    { sku: "G05", name: "GHK-CU (50mg)", price_pence: 2500, sizes: ["Standard"], colors: ["Default"] },
+    { sku: "G06", name: "KPV (10mg)", price_pence: 2500, sizes: ["Standard"], colors: ["Default"] },
+    { sku: "G07", name: "PT-141 (10mg)", price_pence: 2000, sizes: ["Standard"], colors: ["Default"] },
   ],
 };
 
