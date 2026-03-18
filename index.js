@@ -300,23 +300,21 @@ async function getUserShippingProfile(userId) {
 /* ----------------------------- SHOP CATALOG ----------------------------- */
 
 const CATALOG = {
-  "​⭐ BEST SELLERS (PENS)": [
-    { sku: "A01", name: "🖊️ REMEDIUM Research RETA PEN (30mg)", price_pence: 14000 },
-    { sku: "A02", name: "​🖊️ APEX Pharma RETA PEN (40mg) [DUE IN]", price_pence: 16000 },
-    { sku: "A03", name: "🖊️ ALLUVI TIRZEPATIDE PEN (40mg)", price_pence: 11000 },
+  "​💉 FEATURED PENS/SPECIAL OFFERS": [
+    { sku: "A01", name: "APEX PHARMA 40mg Retatrutide", price_pence: 14000 },
+    { sku: "A02", name: "REMEDIUM Research Tirzepatide (30mg)​", price_pence: 11500 },
+    { sku: "A03", name: "REMEDIUM Research Retatrutide 30mg (due in soon)", price_pence: 14000 },
   ],
-  "​💉 PREMIUM PENS": [
-    { sku: "B01", name: "⚡ NAD+ (1000mg)", price_pence: 13000 },
-    { sku: "B02", name: "​🐺 Wolverine Stack (BPC-157 20mg / TB-500 20mg) [DUE IN]", price_pence: 11500 },
-    { sku: "B03", name: "​✨ GLOW (GHK-CU + BPC-157 + TB-500) 70mg [DUE IN]", price_pence: 10000 },
+  "🧬 POPULAR PEPTIDES (Vials)​": [
+    { sku: "B01", name: "🧪 Retatrutide (50mg)", price_pence: 13000 },
+    { sku: "B02", name: "🧪 Retatrutide (10mg)​", price_pence: 5000 },
+    { sku: "B03", name: "🧪 Tirzepatide (40mg)​", price_pence: 9000 },
+    { sku: "B04", name: "🧪 MT2 (Tanning) (10mg)​", price_pence: 2000 },
   ],
-  "​🧬 PEPTIDES (VIALS)": [
-    { sku: "C01", name: "​🧪 Retatrutide (30mg)", price_pence: 8500 },
-    { sku: "C02", name: "​🧪 Tirzepatide (40mg) [DUE IN]", price_pence: 7500 },
-    { sku: "C03", name: "🧪 Tesamorelin (10mg)", price_pence: 4000 },
-    { sku: "C04", name: "​🧪 MOTS-C (40mg) [DUE IN]", price_pence: 4500 },
-    { sku: "C05", name: "​🧪 BPC-157 (10mg)", price_pence: 2000 },
-    { sku: "C06", name: "​🧪 PT-141 (10mg)", price_pence: 1500 },
+  "​💪 RECOVERY / HEALING": [
+    { sku: "C01", name: "BPC-157 + TB-500 Blend (15mg/15mg)​", price_pence: 6000 },
+    { sku: "C02", name: "Glow Blend (BPC-157 + TB-500 + GHK-CU) (70mg)​", price_pence: 5500 },
+    { sku: "C03", name: "KLOW Combo (BPC-157 + TB-500 + GHK-CU + KPV) (80mg)", price_pence: 7000 },
   ],
   "​👑 INJECTABLES (Crown Pharma Oils)": [
     { sku: "D01", name: "​💉 Test 400mg", price_pence: 3500 },
