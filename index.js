@@ -349,6 +349,37 @@ const CATALOG = {
     { sku: "G06", name: "KPV (10mg)", price_pence: 2500, sizes: ["Standard"], colors: ["Default"] },
     { sku: "G07", name: "PT-141 (10mg)", price_pence: 2000, sizes: ["Standard"], colors: ["Default"] },
   ],
+  "💉 INJECTABLE OILS — CROWN PHARMA": [
+    { sku: "H01", name: "Test (400mg) (coming soon)", price_pence: 3500, sizes: ["Standard"], colors: ["Default"] },
+    { sku: "H02", name: "Test E (300mg)", price_pence: 3000, sizes: ["Standard"], colors: ["Default"] },
+    { sku: "H03", name: "Test Cyp (250mg)", price_pence: 3000, sizes: ["Standard"], colors: ["Default"] },
+    { sku: "H04", name: "Test Prop (120mg)", price_pence: 2500, sizes: ["Standard"], colors: ["Default"] },
+    { sku: "H05", name: "Sustanon (300mg)", price_pence: 3000, sizes: ["Standard"], colors: ["Default"] },
+    { sku: "H06", name: "Deca (330mg)", price_pence: 3500, sizes: ["Standard"], colors: ["Default"] },
+    { sku: "H07", name: "NPP (150mg)", price_pence: 3500, sizes: ["Standard"], colors: ["Default"] },
+    { sku: "H08", name: "RIP Blend 200 (Test Prop / Tren Ace / Mast Prop)", price_pence: 3500, sizes: ["Standard"], colors: ["Default"] },
+  ],
+  "💊 SEXUAL HEALTH​": [
+    { sku: "I01", name: "Kamagra Jelly (7 sachets)", price_pence: 1000 },
+    { sku: "I02", name: "​Viagra (100 tabs)", price_pence: 3500 },
+    { sku: "I03", name: "Cialis (100 tabs) (coming soon)​", price_pence: 3500 },
+    { sku: "I04", name: "​Cialis Individual Strip (10 tabs)", price_pence: 1000 },
+  ],
+  "🛡 PCT & AI": [
+    { sku: "J01", name: "HCG 5000IU", price_pence: 2500 },
+    { sku: "J02", name: "Clomid (100 tabs)​", price_pence: 2500 },
+    { sku: "J03", name: "Tamoxifen (100 tabs)", price_pence: 2500 },
+    { sku: "J04", name: "Arimidex (10 tabs) (1mg)​", price_pence: 2000 },
+    { sku: "J05", name: "Telmisartan (150 tabs)​ (40mg)", price_pence: 2500 },
+  ],
+  "📦 EXTRAS": [
+    { sku: "K01", name: "Modafinil (100 tabs) (200mg)", price_pence: 4500 },
+    { sku: "K02", name: "Kenalog Hayfever Injection (10ml)", price_pence: 2500 },
+    { sku: "K03", name: "Bac Mixing Water (3ml)", price_pence: 500 },
+    { sku: "K04", name: "1ml Syringes (x20)", price_pence: 500 },
+    { sku: "K05", name: "Accutane (100 tabs) (20mg) (coming soon)", price_pence: 4500 },
+    { sku: "K06", name: "Vitamin B12 injections (10×1ml) (coming soon)", price_pence: 2000 },
+  ],
 };
 
 const categoryOptions = Object.keys(CATALOG).map((cat) => ({ label: cat, value: cat }));
