@@ -302,8 +302,9 @@ async function getUserShippingProfile(userId) {
 const CATALOG = {
   "​💉 FEATURED PENS/SPECIAL OFFERS": [
     { sku: "A01", name: "APEX PHARMA 40mg Retatrutide", price_pence: 14000 },
-    { sku: "A02", name: "REMEDIUM Research Tirzepatide (30mg)​", price_pence: 11500 },
+    { sku: "A02", name: "APEX Wolverine BPC/TB Pen 20/20​", price_pence: 12000 },
     { sku: "A03", name: "REMEDIUM Research Retatrutide 30mg (due in soon)", price_pence: 14000 },
+    { sku: "A04", name: "REVION Glow Pens 70mg", price_pence: 11000 },
   ],
   "🧬 POPULAR PEPTIDES (Vials)​": [
     { sku: "B01", name: "🧪 Retatrutide (50mg)", price_pence: 13000 },
