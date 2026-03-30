@@ -348,7 +348,7 @@ const CATALOG = {
   ],
   "💤 PAIN & SLEEP": [
     { sku: "F01", name: "Melatonin 5mg (100 tabs)", price_pence: 1500, sizes: ["Standard"], colors: ["Default"] },
-    { sku: "F02", name: "Zopiclone 10mg (140 tabs)", price_pence: 4500, sizes: ["Standard"], colors: ["Default"] },
+    { sku: "F02", name: "Zopiclone 10mg (140 tabs)", price_pence: 4000, sizes: ["Standard"], colors: ["Default"] },
     { sku: "F03", name: "Diaz (10 tabs) (10mg)", price_pence: 1000, sizes: ["Standard"], colors: ["Default"] },
     { sku: "F04", name: "Diaz (30 tabs) (10mg)", price_pence: 2500, sizes: ["Standard"], colors: ["Default"] },
     { sku: "F05", name: "UK Pregabalin (150 caps) (300mg)", price_pence: 5000, sizes: ["Standard"], colors: ["Default"] },
