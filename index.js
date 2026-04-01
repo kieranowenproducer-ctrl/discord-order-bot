@@ -884,9 +884,16 @@ client.on("interactionCreate", async (interaction) => {
       }
 
       if (customId === "cart_clear") {
-        await clearCart(interaction.user.id);
-        return interaction.reply({ content: "🗑️ Cart cleared.", ephemeral: true });
-      }
+  await clearCart(interaction.user.id);
+
+  return interaction.update({
+    content:
+      "🗑️ **Basket empty**\n\n" +
+      "Your cart has been cleared.\n" +
+      "Choose a category below to start a new order:",
+    components: categorySelectComponents(),
+  });
+}
 
       if (customId === "cart_submit") {
         const cart = await getCartSummary(interaction.user.id);
