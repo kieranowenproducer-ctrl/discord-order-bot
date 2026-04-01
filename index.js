@@ -1500,8 +1500,8 @@ if (customId.startsWith("staff_mark_paid:")) {
       }
     }
 
-    if (customId.startsWith("staff_cancel_order:")) {
-  const [, orderIdStr] = customId.split(":");
+    if (interaction.customId.startsWith("staff_cancel_order:")) {
+  const [, orderIdStr] = interaction.customId.split(":");
   const orderId = parseInt(orderIdStr, 10);
 
   if (!isStaff(interaction.member)) {
