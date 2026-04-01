@@ -770,6 +770,62 @@ function staffPanelComponents() {
   return { embed, row };
 }
 
+function staffStockCategoryComponents() {
+  return [
+    new ActionRowBuilder().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId("staff_stock_select_category")
+        .setPlaceholder("Choose a category…")
+        .addOptions(
+          Object.keys(CATALOG).map((category) => ({
+            label: category.slice(0, 100),
+            value: category,
+          }))
+        )
+    ),
+  ];
+}
+
+function staffStockItemComponents(category) {
+  const items = CATALOG[category] || [];
+
+  return [
+    new ActionRowBuilder().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId(`staff_stock_select_item:${category}`)
+        .setPlaceholder("Choose an item…")
+        .addOptions(
+          items.map((item) => ({
+            label: `${item.name}`.slice(0, 100),
+            description: `SKU: ${item.sku}`.slice(0, 100),
+            value: item.sku,
+          }))
+        )
+    ),
+  ];
+}
+
+function staffStockQtyModal(category, sku) {
+  const item = (CATALOG[category] || []).find((x) => x.sku === sku);
+
+  const modal = new ModalBuilder()
+    .setCustomId(`staff_stock_qty_modal:${category}:${sku}`)
+    .setTitle("Update Stock");
+
+  const qtyInput = new TextInputBuilder()
+    .setCustomId("stock_qty")
+    .setLabel(`New stock for ${item?.name || sku}`.slice(0, 45))
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+    .setPlaceholder("Example: 25");
+
+  modal.addComponents(
+    new ActionRowBuilder().addComponents(qtyInput)
+  );
+
+  return modal;
+}
+
 /* -------------------------- MODALS (MAX 5 INPUTS) ------------------------- */
 
 function shippingModal() {
@@ -888,33 +944,6 @@ function verifyModal() {
     new ActionRowBuilder().addComponents(referralInput),
     new ActionRowBuilder().addComponents(emailInput),
     new ActionRowBuilder().addComponents(phoneInput)
-  );
-
-  return modal;
-}
-
-function staffStockModal() {
-  const modal = new ModalBuilder()
-    .setCustomId("staff_stock_modal")
-    .setTitle("Adjust Stock");
-
-  const skuInput = new TextInputBuilder()
-    .setCustomId("stock_sku")
-    .setLabel("SKU")
-    .setStyle(TextInputStyle.Short)
-    .setRequired(true)
-    .setPlaceholder("Example: A01");
-
-  const qtyInput = new TextInputBuilder()
-    .setCustomId("stock_qty")
-    .setLabel("New stock quantity")
-    .setStyle(TextInputStyle.Short)
-    .setRequired(true)
-    .setPlaceholder("Example: 25");
-
-  modal.addComponents(
-    new ActionRowBuilder().addComponents(skuInput),
-    new ActionRowBuilder().addComponents(qtyInput)
   );
 
   return modal;
@@ -1186,7 +1215,12 @@ client.on("interactionCreate", async (interaction) => {
         if (!isStaffChannel(interaction)) {
           return interaction.reply({ content: "Use this in the staff-only channel.", ephemeral: true });
         }
-        return interaction.showModal(staffStockModal());
+
+        return interaction.reply({
+          content: "Choose a category to update stock:",
+          components: staffStockCategoryComponents(),
+          ephemeral: true,
+        });
       }
 
       if (customId === "staff_open_orderlookup_modal") {
@@ -1449,35 +1483,35 @@ client.on("interactionCreate", async (interaction) => {
         }
       }
 
-if (customId.startsWith("staff_mark_paid:")) {
-  const [, orderIdStr] = customId.split(":");
-  const orderId = parseInt(orderIdStr, 10);
+      if (customId.startsWith("staff_mark_paid:")) {
+        const [, orderIdStr] = customId.split(":");
+        const orderId = parseInt(orderIdStr, 10);
 
-  console.log("PAID BUTTON CLICKED", {
-    orderId,
-    userId: interaction.user.id,
-    username: interaction.user.tag,
-  });
+        console.log("PAID BUTTON CLICKED", {
+          orderId,
+          userId: interaction.user.id,
+          username: interaction.user.tag,
+        });
 
-  if (!isStaff(interaction.member)) {
-    console.log("PAID BLOCKED: not staff");
-    return interaction.reply({ content: "Staff only.", ephemeral: true });
-  }
+        if (!isStaff(interaction.member)) {
+          console.log("PAID BLOCKED: not staff");
+          return interaction.reply({ content: "Staff only.", ephemeral: true });
+        }
 
-  await pool.query(`UPDATE orders SET status='paid' WHERE order_id=$1`, [orderId]);
-  console.log("PAID DB UPDATED", { orderId });
+        await pool.query(`UPDATE orders SET status='paid' WHERE order_id=$1`, [orderId]);
+        console.log("PAID DB UPDATED", { orderId });
 
-  await interaction.update({
-    content: `✅ Order #${orderId} marked as paid.`,
-    embeds: interaction.message.embeds,
-    components: staffReceiptControls(orderId, "paid"),
-  });
+        await interaction.update({
+          content: `✅ Order #${orderId} marked as paid.`,
+          embeds: interaction.message.embeds,
+          components: staffReceiptControls(orderId, "paid"),
+        });
 
-  await interaction.channel.send(`✅ Order #${orderId} has been marked as paid.`);
-  console.log("PAID CHANNEL MESSAGE SENT", { orderId });
+        await interaction.channel.send(`✅ Order #${orderId} has been marked as paid.`);
+        console.log("PAID CHANNEL MESSAGE SENT", { orderId });
 
-  return;
-}
+        return;
+      }
 
       if (customId.startsWith("staff_mark_dispatched:")) {
         const [, orderIdStr] = customId.split(":");
@@ -1498,89 +1532,120 @@ if (customId.startsWith("staff_mark_paid:")) {
         await interaction.channel.send(`📦 Order #${orderId} has been marked as dispatched.`);
         return;
       }
+
+      if (customId.startsWith("staff_cancel_order:")) {
+        const [, orderIdStr] = customId.split(":");
+        const orderId = parseInt(orderIdStr, 10);
+
+        if (!isStaff(interaction.member)) {
+          return interaction.reply({ content: "Staff only.", ephemeral: true });
+        }
+
+        const orderRes = await pool.query(
+          `SELECT status, user_id FROM orders WHERE order_id=$1`,
+          [orderId]
+        );
+
+        if (!orderRes.rows.length) {
+          return interaction.reply({
+            content: "Order not found.",
+            ephemeral: true,
+          });
+        }
+
+        const currentStatus = orderRes.rows[0].status;
+        const customerUserId = orderRes.rows[0].user_id;
+
+        if (currentStatus === "cancelled") {
+          return interaction.reply({
+            content: "This order is already cancelled.",
+            ephemeral: true,
+          });
+        }
+
+        if (currentStatus === "dispatched") {
+          return interaction.reply({
+            content: "Dispatched orders cannot be cancelled.",
+            ephemeral: true,
+          });
+        }
+
+        const itemsRes = await pool.query(
+          `SELECT sku, qty FROM order_items WHERE order_id=$1`,
+          [orderId]
+        );
+
+        for (const item of itemsRes.rows) {
+          await pool.query(
+            `
+            UPDATE stock_items
+            SET stock_qty = stock_qty + $1,
+                updated_at = NOW()
+            WHERE sku = $2
+            `,
+            [item.qty, item.sku]
+          );
+        }
+
+        await pool.query(
+          `UPDATE orders SET status='cancelled' WHERE order_id=$1`,
+          [orderId]
+        );
+
+        await interaction.update({
+          content: `❌ Order #${orderId} has been cancelled.`,
+          embeds: interaction.message.embeds,
+          components: staffReceiptControls(orderId, "cancelled"),
+        });
+
+        await interaction.channel.send(
+          `❌ Order #${orderId} has been cancelled. Stock has been restored.`
+        );
+
+        try {
+          await interaction.channel.permissionOverwrites.edit(customerUserId, {
+            SendMessages: false,
+          });
+        } catch {
+          // ignore lock errors
+        }
+
+        return;
+      }
     }
 
-    if (interaction.customId.startsWith("staff_cancel_order:")) {
-  const [, orderIdStr] = interaction.customId.split(":");
-  const orderId = parseInt(orderIdStr, 10);
-
-  if (!isStaff(interaction.member)) {
-    return interaction.reply({ content: "Staff only.", ephemeral: true });
-  }
-
-  const orderRes = await pool.query(
-    `SELECT status, user_id FROM orders WHERE order_id=$1`,
-    [orderId]
-  );
-
-  if (!orderRes.rows.length) {
-    return interaction.reply({
-      content: "Order not found.",
-      ephemeral: true,
-    });
-  }
-
-  const currentStatus = orderRes.rows[0].status;
-  const customerUserId = orderRes.rows[0].user_id;
-
-  if (currentStatus === "cancelled") {
-    return interaction.reply({
-      content: "This order is already cancelled.",
-      ephemeral: true,
-    });
-  }
-
-  if (currentStatus === "dispatched") {
-    return interaction.reply({
-      content: "Dispatched orders cannot be cancelled.",
-      ephemeral: true,
-    });
-  }
-
-  const itemsRes = await pool.query(
-    `SELECT sku, qty FROM order_items WHERE order_id=$1`,
-    [orderId]
-  );
-
-  for (const item of itemsRes.rows) {
-    await pool.query(
-      `
-      UPDATE stock_items
-      SET stock_qty = stock_qty + $1,
-          updated_at = NOW()
-      WHERE sku = $2
-      `,
-      [item.qty, item.sku]
-    );
-  }
-
-  await pool.query(
-    `UPDATE orders SET status='cancelled' WHERE order_id=$1`,
-    [orderId]
-  );
-
-  await interaction.update({
-    content: `❌ Order #${orderId} has been cancelled.`,
-    embeds: interaction.message.embeds,
-    components: staffReceiptControls(orderId, "cancelled"),
-  });
-
-  await interaction.channel.send(
-    `❌ Order #${orderId} has been cancelled. Stock has been restored.`
-  );
-
-  try {
-    await interaction.channel.permissionOverwrites.edit(customerUserId, {
-      SendMessages: false,
-    });
-  } catch {
-    // ignore lock errors for now
-  }
-
-  return;
-}
     if (interaction.isStringSelectMenu()) {
       const { customId } = interaction;
+
+      if (customId === "staff_stock_select_category") {
+        if (!isStaff(interaction.member)) {
+          return interaction.reply({ content: "Staff only.", ephemeral: true });
+        }
+        if (!isStaffChannel(interaction)) {
+          return interaction.reply({ content: "Use this in the staff-only channel.", ephemeral: true });
+        }
+
+        const category = interaction.values[0];
+
+        return interaction.update({
+          content: `Category selected: **${category}**\nNow choose an item:`,
+          components: staffStockItemComponents(category),
+        });
+      }
+
+      if (customId.startsWith("staff_stock_select_item:")) {
+        if (!isStaff(interaction.member)) {
+          return interaction.reply({ content: "Staff only.", ephemeral: true });
+        }
+        if (!isStaffChannel(interaction)) {
+          return interaction.reply({ content: "Use this in the staff-only channel.", ephemeral: true });
+        }
+
+        const [, category] = customId.split(":");
+        const sku = interaction.values[0];
+
+        return interaction.showModal(staffStockQtyModal(category, sku));
+      }
 
       if (customId === "select_category") {
         const category = interaction.values[0];
@@ -1709,7 +1774,7 @@ if (customId.startsWith("staff_mark_paid:")) {
         });
       }
 
-      if (customId === "staff_stock_modal") {
+      if (customId.startsWith("staff_stock_qty_modal:")) {
         if (!isStaff(interaction.member)) {
           return interaction.reply({ content: "Staff only.", ephemeral: true });
         }
@@ -1717,21 +1782,21 @@ if (customId.startsWith("staff_mark_paid:")) {
           return interaction.reply({ content: "Use this in the staff-only channel.", ephemeral: true });
         }
 
-        const sku = interaction.fields.getTextInputValue("stock_sku")?.trim().toUpperCase();
+        const [, category, sku] = customId.split(":");
         const qtyRaw = interaction.fields.getTextInputValue("stock_qty")?.trim();
         const qty = parseInt(qtyRaw, 10);
 
-        if (!sku || !Number.isFinite(qty) || qty < 0) {
+        if (!Number.isFinite(qty) || qty < 0) {
           return interaction.reply({
-            content: "Enter a valid SKU and a stock quantity of 0 or more.",
+            content: "Enter a valid stock quantity of 0 or more.",
             ephemeral: true,
           });
         }
 
-        const stockExists = await pool.query(`SELECT 1 FROM stock_items WHERE sku=$1`, [sku]);
-        if (!stockExists.rows.length) {
+        const item = (CATALOG[category] || []).find((x) => x.sku === sku);
+        if (!item) {
           return interaction.reply({
-            content: "That SKU does not exist.",
+            content: "Item not found.",
             ephemeral: true,
           });
         }
@@ -1742,7 +1807,7 @@ if (customId.startsWith("staff_mark_paid:")) {
         );
 
         return interaction.reply({
-          content: `✅ Stock updated for ${sku} → ${qty}`,
+          content: `✅ Stock updated for **${item.name}** (${sku}) → ${qty}`,
           ephemeral: true,
         });
       }
