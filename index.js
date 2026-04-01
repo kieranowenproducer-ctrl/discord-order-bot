@@ -308,6 +308,40 @@ async function initDb() {
     );
   `);
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS discount_codes (
+      code TEXT PRIMARY KEY,
+      discount_percent INT NOT NULL CHECK (discount_percent >= 0 AND discount_percent <= 100),
+      is_active BOOLEAN NOT NULL DEFAULT TRUE,
+      one_use_per_user BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`ALTER TABLE IF EXISTS discount_codes ADD COLUMN IF NOT EXISTS discount_percent INT NOT NULL DEFAULT 0;`);
+  await pool.query(`ALTER TABLE IF EXISTS discount_codes ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;`);
+  await pool.query(`ALTER TABLE IF EXISTS discount_codes ADD COLUMN IF NOT EXISTS one_use_per_user BOOLEAN NOT NULL DEFAULT TRUE;`);
+  await pool.query(`ALTER TABLE IF EXISTS discount_codes ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();`);
+  await pool.query(`ALTER TABLE IF EXISTS discount_codes ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS discount_code_uses (
+      id BIGSERIAL PRIMARY KEY,
+      code TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      order_id BIGINT,
+      used_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE (code, user_id)
+    );
+  `);
+
+  await pool.query(`
+    INSERT INTO discount_codes (code, discount_percent, is_active, one_use_per_user, created_at, updated_at)
+    VALUES ($1, $2, TRUE, TRUE, NOW(), NOW())
+    ON CONFLICT (code) DO NOTHING
+  `, [String(WELCOME_CODE || "").toUpperCase(), Number(WELCOME_DISCOUNT_PERCENT || 0)]);
+
   for (const category of Object.keys(CATALOG)) {
     for (const item of CATALOG[category]) {
       await pool.query(
@@ -354,6 +388,128 @@ function calculateDiscountedTotals(subtotal, shipping, discountPercent) {
     discountPercent: safePercent,
     discountAmount,
     total,
+  };
+}
+
+function normalizeDiscountCode(code) {
+  return String(code || "").trim().toUpperCase();
+}
+
+async function createDiscountCodeRecord(code, discountPercent) {
+  const normalized = normalizeDiscountCode(code);
+  const percent = Math.max(0, Math.min(100, Number(discountPercent || 0)));
+
+  await pool.query(
+    `
+    INSERT INTO discount_codes (code, discount_percent, is_active, one_use_per_user, created_at, updated_at)
+    VALUES ($1, $2, TRUE, TRUE, NOW(), NOW())
+    ON CONFLICT (code) DO UPDATE
+    SET discount_percent = EXCLUDED.discount_percent,
+        updated_at = NOW()
+    `,
+    [normalized, percent]
+  );
+}
+
+async function getDiscountCodeRecord(code) {
+  const normalized = normalizeDiscountCode(code);
+  if (!normalized) return null;
+
+  const res = await pool.query(
+    `
+    SELECT code, discount_percent, is_active, one_use_per_user
+    FROM discount_codes
+    WHERE code = $1
+    `,
+    [normalized]
+  );
+
+  return res.rows[0] || null;
+}
+
+async function setDiscountCodeActiveState(code, isActive) {
+  const normalized = normalizeDiscountCode(code);
+
+  const res = await pool.query(
+    `
+    UPDATE discount_codes
+    SET is_active = $2,
+        updated_at = NOW()
+    WHERE code = $1
+    RETURNING code, discount_percent, is_active, one_use_per_user
+    `,
+    [normalized, isActive]
+  );
+
+  return res.rows[0] || null;
+}
+
+async function hasUserUsedDiscountCode(userId, code) {
+  const normalized = normalizeDiscountCode(code);
+
+  const res = await pool.query(
+    `
+    SELECT 1
+    FROM discount_code_uses
+    WHERE user_id = $1 AND code = $2
+    LIMIT 1
+    `,
+    [userId, normalized]
+  );
+
+  return res.rows.length > 0;
+}
+
+async function recordDiscountCodeUse(userId, code, orderId) {
+  const normalized = normalizeDiscountCode(code);
+
+  await pool.query(
+    `
+    INSERT INTO discount_code_uses (code, user_id, order_id, used_at)
+    VALUES ($1, $2, $3, NOW())
+    ON CONFLICT (code, user_id) DO NOTHING
+    `,
+    [normalized, userId, orderId]
+  );
+}
+
+async function validateDiscountCodeForUser(userId, code) {
+  const normalized = normalizeDiscountCode(code);
+  if (!normalized) {
+    return { valid: false, reason: "Please enter a code." };
+  }
+
+  const record = await getDiscountCodeRecord(normalized);
+  if (!record) {
+    return { valid: false, reason: "That discount code is invalid." };
+  }
+
+  if (!record.is_active) {
+    return { valid: false, reason: "That discount code is currently inactive." };
+  }
+
+  const isWelcome = normalized === normalizeDiscountCode(WELCOME_CODE);
+
+  if (isWelcome) {
+    const hasOrderedBefore = await hasUserPlacedOrderBefore(userId);
+    if (hasOrderedBefore) {
+      return { valid: false, reason: "This code is only valid on your first order." };
+    }
+  }
+
+  if (record.one_use_per_user) {
+    const alreadyUsed = await hasUserUsedDiscountCode(userId, normalized);
+    if (alreadyUsed) {
+      return { valid: false, reason: "You have already used that discount code." };
+    }
+  }
+
+  return {
+    valid: true,
+    code: normalized,
+    discount_percent: Number(record.discount_percent || 0),
+    is_active: !!record.is_active,
+    one_use_per_user: !!record.one_use_per_user,
   };
 }
 
@@ -485,7 +641,7 @@ async function setCartDiscount(userId, code, percent) {
         updated_at=NOW()
     WHERE cart_id=$3
     `,
-    [code, percent, cartId]
+    [normalizeDiscountCode(code), percent, cartId]
   );
 }
 
@@ -748,11 +904,13 @@ function staffPanelComponents() {
         "Available actions:",
         "• Adjust stock",
         "• Lookup an order",
+        "• Create discount code",
+        "• Toggle discount code active/inactive",
         "• Restock all items to default"
       ].join("\n")
     );
 
-  const row = new ActionRowBuilder().addComponents(
+  const row1 = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId("staff_open_stock_modal")
       .setLabel("Adjust Stock")
@@ -762,12 +920,23 @@ function staffPanelComponents() {
       .setLabel("Lookup Order")
       .setStyle(ButtonStyle.Secondary),
     new ButtonBuilder()
+      .setCustomId("staff_open_create_discount_modal")
+      .setLabel("Create Discount Code")
+      .setStyle(ButtonStyle.Success)
+  );
+
+  const row2 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId("staff_open_toggle_discount_modal")
+      .setLabel("Toggle Discount Code")
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
       .setCustomId("staff_restock_all_confirm")
       .setLabel("Restock All")
       .setStyle(ButtonStyle.Danger)
   );
 
-  return { embed, row };
+  return { embed, rows: [row1, row2] };
 }
 
 function staffStockCategoryComponents() {
@@ -965,6 +1134,60 @@ function staffOrderLookupModal() {
   return modal;
 }
 
+function staffCreateDiscountModal() {
+  const modal = new ModalBuilder()
+    .setCustomId("staff_create_discount_modal")
+    .setTitle("Create Discount Code");
+
+  const codeInput = new TextInputBuilder()
+    .setCustomId("discount_code")
+    .setLabel("Discount code")
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+    .setPlaceholder("Example: SPRING15");
+
+  const percentInput = new TextInputBuilder()
+    .setCustomId("discount_percent")
+    .setLabel("Discount percent")
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+    .setPlaceholder("Example: 15");
+
+  modal.addComponents(
+    new ActionRowBuilder().addComponents(codeInput),
+    new ActionRowBuilder().addComponents(percentInput)
+  );
+
+  return modal;
+}
+
+function staffToggleDiscountModal() {
+  const modal = new ModalBuilder()
+    .setCustomId("staff_toggle_discount_modal")
+    .setTitle("Toggle Discount Code");
+
+  const codeInput = new TextInputBuilder()
+    .setCustomId("discount_code")
+    .setLabel("Discount code")
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+    .setPlaceholder("Example: SPRING15");
+
+  const activeInput = new TextInputBuilder()
+    .setCustomId("discount_active")
+    .setLabel("Type active or inactive")
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+    .setPlaceholder("active");
+
+  modal.addComponents(
+    new ActionRowBuilder().addComponents(codeInput),
+    new ActionRowBuilder().addComponents(activeInput)
+  );
+
+  return modal;
+}
+
 /* ---------------------------- RECEIPT CHANNEL ---------------------------- */
 
 async function createReceiptChannel(guild, user, orderId) {
@@ -1139,11 +1362,11 @@ client.on("interactionCreate", async (interaction) => {
           return interaction.editReply("❌ Could not find the staff-only channel. Check STAFF_ONLY_CHANNEL_ID.");
         }
 
-        const { embed, row } = staffPanelComponents();
+        const { embed, rows } = staffPanelComponents();
 
         await staffChannel.send({
           embeds: [embed],
-          components: [row],
+          components: rows,
         });
 
         return interaction.editReply(`✅ Staff panel posted in <#${STAFF_ONLY_CHANNEL_ID}>.`);
@@ -1231,6 +1454,28 @@ client.on("interactionCreate", async (interaction) => {
           return interaction.reply({ content: "Use this in the staff-only channel.", ephemeral: true });
         }
         return interaction.showModal(staffOrderLookupModal());
+      }
+
+      if (customId === "staff_open_create_discount_modal") {
+        if (!isStaff(interaction.member)) {
+          return interaction.reply({ content: "Staff only.", ephemeral: true });
+        }
+        if (!isStaffChannel(interaction)) {
+          return interaction.reply({ content: "Use this in the staff-only channel.", ephemeral: true });
+        }
+
+        return interaction.showModal(staffCreateDiscountModal());
+      }
+
+      if (customId === "staff_open_toggle_discount_modal") {
+        if (!isStaff(interaction.member)) {
+          return interaction.reply({ content: "Staff only.", ephemeral: true });
+        }
+        if (!isStaffChannel(interaction)) {
+          return interaction.reply({ content: "Use this in the staff-only channel.", ephemeral: true });
+        }
+
+        return interaction.showModal(staffToggleDiscountModal());
       }
 
       if (customId === "staff_restock_all_confirm") {
@@ -1382,16 +1627,22 @@ client.on("interactionCreate", async (interaction) => {
           const subtotal = cart.subtotal_pence;
           const shipping = getShippingPenceForCountry(shippingProfile.country);
 
-          const discount = await getCartDiscount(interaction.user.id);
+          let discount = await getCartDiscount(interaction.user.id);
 
           if (discount.discount_code) {
-            const hasOrderedBefore = await hasUserPlacedOrderBefore(interaction.user.id);
-            if (hasOrderedBefore) {
+            const validation = await validateDiscountCodeForUser(interaction.user.id, discount.discount_code);
+
+            if (!validation.valid) {
               await clearCartDiscount(interaction.user.id);
               return interaction.reply({
-                content: "That welcome code is only valid on your first order and cannot be used here.",
+                content: `${validation.reason} The code has been removed from this basket.`,
                 ephemeral: true,
               });
+            }
+
+            if (Number(discount.discount_percent || 0) !== Number(validation.discount_percent || 0)) {
+              await setCartDiscount(interaction.user.id, validation.code, validation.discount_percent);
+              discount = await getCartDiscount(interaction.user.id);
             }
           }
 
@@ -1444,6 +1695,10 @@ client.on("interactionCreate", async (interaction) => {
               `,
               [it.qty, it.sku]
             );
+          }
+
+          if (discount.discount_code) {
+            await recordDiscountCodeUse(interaction.user.id, discount.discount_code, orderId);
           }
 
           const guild = interaction.guild;
@@ -1866,6 +2121,77 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
+      if (customId === "staff_create_discount_modal") {
+        if (!isStaff(interaction.member)) {
+          return interaction.reply({ content: "Staff only.", ephemeral: true });
+        }
+        if (!isStaffChannel(interaction)) {
+          return interaction.reply({ content: "Use this in the staff-only channel.", ephemeral: true });
+        }
+
+        const codeRaw = interaction.fields.getTextInputValue("discount_code")?.trim();
+        const percentRaw = interaction.fields.getTextInputValue("discount_percent")?.trim();
+
+        const code = normalizeDiscountCode(codeRaw);
+        const percent = parseInt(percentRaw, 10);
+
+        if (!code) {
+          return interaction.reply({ content: "Enter a valid code.", ephemeral: true });
+        }
+
+        if (!Number.isFinite(percent) || percent < 0 || percent > 100) {
+          return interaction.reply({ content: "Enter a valid percent from 0 to 100.", ephemeral: true });
+        }
+
+        await createDiscountCodeRecord(code, percent);
+
+        return interaction.reply({
+          content: `✅ Discount code **${code}** created/updated at ${percent}% and set active.`,
+          ephemeral: true,
+        });
+      }
+
+      if (customId === "staff_toggle_discount_modal") {
+        if (!isStaff(interaction.member)) {
+          return interaction.reply({ content: "Staff only.", ephemeral: true });
+        }
+        if (!isStaffChannel(interaction)) {
+          return interaction.reply({ content: "Use this in the staff-only channel.", ephemeral: true });
+        }
+
+        const codeRaw = interaction.fields.getTextInputValue("discount_code")?.trim();
+        const stateRaw = interaction.fields.getTextInputValue("discount_active")?.trim().toLowerCase();
+
+        const code = normalizeDiscountCode(codeRaw);
+
+        if (!code) {
+          return interaction.reply({ content: "Enter a valid code.", ephemeral: true });
+        }
+
+        let active;
+        if (stateRaw === "active") active = true;
+        else if (stateRaw === "inactive") active = false;
+        else {
+          return interaction.reply({
+            content: "Type either active or inactive.",
+            ephemeral: true,
+          });
+        }
+
+        const updated = await setDiscountCodeActiveState(code, active);
+        if (!updated) {
+          return interaction.reply({
+            content: "That discount code was not found.",
+            ephemeral: true,
+          });
+        }
+
+        return interaction.reply({
+          content: `✅ Discount code **${updated.code}** is now **${updated.is_active ? "active" : "inactive"}**.`,
+          ephemeral: true,
+        });
+      }
+
       if (customId.startsWith("qty_other_modal:")) {
         const [, category, sku] = customId.split(":");
         const qtyRaw = interaction.fields.getTextInputValue("qty");
@@ -1905,7 +2231,7 @@ client.on("interactionCreate", async (interaction) => {
 
       if (customId === "discount_code_modal") {
         const enteredRaw = interaction.fields.getTextInputValue("discount_code")?.trim();
-        const enteredCode = String(enteredRaw || "").toUpperCase();
+        const enteredCode = normalizeDiscountCode(enteredRaw);
 
         if (!enteredCode) {
           return interaction.reply({ content: "Please enter a code.", ephemeral: true });
@@ -1924,19 +2250,15 @@ client.on("interactionCreate", async (interaction) => {
           });
         }
 
-        if (enteredCode !== WELCOME_CODE) {
-          return interaction.reply({ content: "That discount code is invalid.", ephemeral: true });
-        }
-
-        const hasOrderedBefore = await hasUserPlacedOrderBefore(interaction.user.id);
-        if (hasOrderedBefore) {
+        const validation = await validateDiscountCodeForUser(interaction.user.id, enteredCode);
+        if (!validation.valid) {
           return interaction.reply({
-            content: "This code is only valid on your first order.",
+            content: validation.reason,
             ephemeral: true,
           });
         }
 
-        await setCartDiscount(interaction.user.id, WELCOME_CODE, WELCOME_DISCOUNT_PERCENT);
+        await setCartDiscount(interaction.user.id, validation.code, validation.discount_percent);
 
         const content = await buildCartMessage(interaction.user.id, "✅ Discount code applied.");
 
@@ -1975,6 +2297,9 @@ client.on("interactionCreate", async (interaction) => {
     console.log("✅ Logged in as", client.user.tag);
     console.log("✅ Slash commands registered");
   });
+
+  await client.login(TOKEN);
+})();
 
   await client.login(TOKEN);
 })();
