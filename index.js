@@ -1,12 +1,11 @@
 // index.js
-// Discord Shop Bot (discord.js v14 + Postgres)
-// - No cart_json usage
-// - Modal limited to 5 inputs
-// - Creates private receipt channels for each order
-// - Bank transfer details shown in receipt channel
-// - Discount code support added
-// - Welcome discount: WELCOME10 = 10% off products only, first order only
-// - Added verification system with /setupverify, modal submit, staff approve button, and auto-role assignment
+// Discord Mock Shop Bot (discord.js v14 + Postgres)
+// - Generic draft shop
+// - Verification system
+// - Stock control
+// - Duplicate order protection
+// - Mark as dispatched
+// - Staff admin panel
 
 const {
   Client,
@@ -37,14 +36,13 @@ const DATABASE_URL = process.env.DATABASE_URL;
 
 const GUILD_ID = process.env.GUILD_ID;
 const MENU_CHANNEL_ID = process.env.MENU_CHANNEL_ID;
-
 const ORDERS_CATEGORY_ID = process.env.ORDERS_CATEGORY_ID;
-const ORDERS_CHANNEL_ID = process.env.ORDERS_CHANNEL_ID; // optional (not required)
 const STAFF_ROLE_ID = process.env.STAFF_ROLE_ID;
 
 const VERIFY_CHANNEL_ID = process.env.VERIFY_CHANNEL_ID;
 const VERIFICATION_LOG_CHANNEL_ID = process.env.VERIFICATION_LOG_CHANNEL_ID;
 const VERIFIED_ROLE_ID = process.env.VERIFIED_ROLE_ID;
+const STAFF_ONLY_CHANNEL_ID = process.env.STAFF_ONLY_CHANNEL_ID;
 
 // Bank details via env vars so you don't hardcode in GitHub
 const BANK_ACCOUNT_NAME = process.env.BANK_ACCOUNT_NAME || "YOUR COMPANY LTD";
@@ -54,9 +52,8 @@ const BANK_BANK_NAME = process.env.BANK_BANK_NAME || "YOUR BANK";
 const BANK_IBAN = process.env.BANK_IBAN || "";
 const BANK_SWIFT = process.env.BANK_SWIFT || "";
 
-const STORE_NAME = "Bodymarket Labs";
+const STORE_NAME = "Bodymarket Labs Demo Store";
 
-// Since we removed size/colour selection, we keep these fixed to avoid changing DB schema/logic.
 const DEFAULT_SIZE = "Standard";
 const DEFAULT_COLOR = "Standard";
 
@@ -77,344 +74,7 @@ requireEnv("STAFF_ROLE_ID", STAFF_ROLE_ID);
 requireEnv("VERIFY_CHANNEL_ID", VERIFY_CHANNEL_ID);
 requireEnv("VERIFICATION_LOG_CHANNEL_ID", VERIFICATION_LOG_CHANNEL_ID);
 requireEnv("VERIFIED_ROLE_ID", VERIFIED_ROLE_ID);
-
-/* ----------------------------- DATABASE SETUP ---------------------------- */
-
-const pool = new Pool({
-  connectionString: DATABASE_URL,
-  ssl: process.env.NODE_ENV === "production" ? { rejectUnauthorized: false } : false,
-});
-
-async function initDb() {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS user_profiles (
-      user_id TEXT PRIMARY KEY,
-      full_name TEXT,
-      email TEXT,
-      phone TEXT,
-      created_at TIMESTAMPTZ DEFAULT NOW(),
-      updated_at TIMESTAMPTZ DEFAULT NOW()
-    );
-  `);
-
-  await pool.query(`ALTER TABLE IF EXISTS user_profiles ADD COLUMN IF NOT EXISTS email TEXT;`);
-  await pool.query(`ALTER TABLE IF EXISTS user_profiles ADD COLUMN IF NOT EXISTS phone TEXT;`);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS shipping_profiles (
-      user_id TEXT PRIMARY KEY REFERENCES user_profiles(user_id) ON DELETE CASCADE,
-      full_address TEXT,
-      country TEXT,
-      updated_at TIMESTAMPTZ DEFAULT NOW()
-    );
-  `);
-
-  await pool.query(`ALTER TABLE IF EXISTS shipping_profiles ADD COLUMN IF NOT EXISTS full_address TEXT;`);
-  await pool.query(`ALTER TABLE IF EXISTS shipping_profiles ADD COLUMN IF NOT EXISTS country TEXT;`);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS carts (
-      cart_id BIGSERIAL PRIMARY KEY,
-      user_id TEXT UNIQUE NOT NULL,
-      status TEXT NOT NULL DEFAULT 'open',
-      discount_code TEXT,
-      discount_percent INT NOT NULL DEFAULT 0,
-      updated_at TIMESTAMPTZ DEFAULT NOW()
-    );
-  `);
-
-  await pool.query(`ALTER TABLE IF EXISTS carts ADD COLUMN IF NOT EXISTS discount_code TEXT;`);
-  await pool.query(`ALTER TABLE IF EXISTS carts ADD COLUMN IF NOT EXISTS discount_percent INT NOT NULL DEFAULT 0;`);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS cart_items (
-      id BIGSERIAL PRIMARY KEY,
-      cart_id BIGINT NOT NULL REFERENCES carts(cart_id) ON DELETE CASCADE,
-      sku TEXT NOT NULL,
-      name TEXT NOT NULL,
-      size TEXT NOT NULL,
-      color TEXT NOT NULL,
-      qty INT NOT NULL CHECK (qty > 0),
-      price_pence INT NOT NULL CHECK (price_pence >= 0)
-    );
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS orders (
-      order_id BIGSERIAL PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      full_name TEXT,
-      email TEXT,
-      phone TEXT,
-      full_address TEXT,
-      country TEXT,
-      subtotal_pence INT NOT NULL,
-      shipping_pence INT NOT NULL,
-      total_pence INT NOT NULL,
-      discount_code TEXT,
-      discount_percent INT NOT NULL DEFAULT 0,
-      discount_amount_pence INT NOT NULL DEFAULT 0,
-      status TEXT NOT NULL DEFAULT 'pending',
-      receipt_channel_id TEXT,
-      payment_url TEXT,
-      created_at TIMESTAMPTZ DEFAULT NOW()
-    );
-  `);
-
-  await pool.query(`ALTER TABLE IF EXISTS orders ADD COLUMN IF NOT EXISTS email TEXT;`);
-  await pool.query(`ALTER TABLE IF EXISTS orders ADD COLUMN IF NOT EXISTS phone TEXT;`);
-  await pool.query(`ALTER TABLE IF EXISTS orders ADD COLUMN IF NOT EXISTS full_address TEXT;`);
-  await pool.query(`ALTER TABLE IF EXISTS orders ADD COLUMN IF NOT EXISTS country TEXT;`);
-  await pool.query(`ALTER TABLE IF EXISTS orders ADD COLUMN IF NOT EXISTS shipping_pence INT;`);
-  await pool.query(`ALTER TABLE IF EXISTS orders ADD COLUMN IF NOT EXISTS discount_code TEXT;`);
-  await pool.query(`ALTER TABLE IF EXISTS orders ADD COLUMN IF NOT EXISTS discount_percent INT NOT NULL DEFAULT 0;`);
-  await pool.query(`ALTER TABLE IF EXISTS orders ADD COLUMN IF NOT EXISTS discount_amount_pence INT NOT NULL DEFAULT 0;`);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS order_items (
-      id BIGSERIAL PRIMARY KEY,
-      order_id BIGINT NOT NULL REFERENCES orders(order_id) ON DELETE CASCADE,
-      sku TEXT NOT NULL,
-      name TEXT NOT NULL,
-      size TEXT NOT NULL,
-      color TEXT NOT NULL,
-      qty INT NOT NULL CHECK (qty > 0),
-      price_pence INT NOT NULL CHECK (price_pence >= 0)
-    );
-  `);
-}
-
-async function upsertProfile(userId, fullName, email, phone, shipping) {
-  await pool.query(
-    `
-    INSERT INTO user_profiles (user_id, full_name, email, phone, updated_at)
-    VALUES ($1, $2, $3, $4, NOW())
-    ON CONFLICT (user_id) DO UPDATE
-    SET full_name = EXCLUDED.full_name,
-        email = EXCLUDED.email,
-        phone = EXCLUDED.phone,
-        updated_at = NOW();
-    `,
-    [userId, fullName, email, phone]
-  );
-
-  await pool.query(
-    `
-    INSERT INTO shipping_profiles (user_id, full_address, country, updated_at)
-    VALUES ($1, $2, $3, NOW())
-    ON CONFLICT (user_id) DO UPDATE
-    SET full_address = EXCLUDED.full_address,
-        country = EXCLUDED.country,
-        updated_at = NOW();
-    `,
-    [userId, shipping.full_address, shipping.country]
-  );
-}
-
-async function getOrCreateCart(userId) {
-  const existing = await pool.query(`SELECT cart_id FROM carts WHERE user_id=$1 AND status='open'`, [userId]);
-  if (existing.rows.length) return existing.rows[0].cart_id;
-
-  const created = await pool.query(
-    `INSERT INTO carts (user_id, status, discount_code, discount_percent, updated_at)
-     VALUES ($1, 'open', NULL, 0, NOW())
-     RETURNING cart_id`,
-    [userId]
-  );
-  return created.rows[0].cart_id;
-}
-
-async function addCartItem(userId, item) {
-  const cartId = await getOrCreateCart(userId);
-  await pool.query(
-    `
-    INSERT INTO cart_items (cart_id, sku, name, size, color, qty, price_pence)
-    VALUES ($1, $2, $3, $4, $5, $6, $7)
-    `,
-    [cartId, item.sku, item.name, item.size, item.color, item.qty, item.price_pence]
-  );
-}
-
-async function clearCart(userId) {
-  const cart = await pool.query(`SELECT cart_id FROM carts WHERE user_id=$1 AND status='open'`, [userId]);
-  if (!cart.rows.length) return;
-
-  const cartId = cart.rows[0].cart_id;
-  await pool.query(`DELETE FROM cart_items WHERE cart_id=$1`, [cartId]);
-  await pool.query(`DELETE FROM carts WHERE cart_id=$1`, [cartId]);
-}
-
-async function getCartSummary(userId) {
-  const cart = await pool.query(`SELECT cart_id FROM carts WHERE user_id=$1 AND status='open'`, [userId]);
-  if (!cart.rows.length) return { items: [], subtotal_pence: 0 };
-
-  const cartId = cart.rows[0].cart_id;
-  const itemsRes = await pool.query(
-    `SELECT sku, name, size, color, qty, price_pence FROM cart_items WHERE cart_id=$1 ORDER BY id ASC`,
-    [cartId]
-  );
-
-  const items = itemsRes.rows;
-  const subtotal_pence = items.reduce((sum, it) => sum + it.qty * it.price_pence, 0);
-  return { items, subtotal_pence };
-}
-
-async function getCartDiscount(userId) {
-  const res = await pool.query(
-    `SELECT discount_code, discount_percent FROM carts WHERE user_id=$1 AND status='open'`,
-    [userId]
-  );
-
-  if (!res.rows.length) {
-    return { discount_code: null, discount_percent: 0 };
-  }
-
-  return {
-    discount_code: res.rows[0].discount_code || null,
-    discount_percent: Number(res.rows[0].discount_percent || 0),
-  };
-}
-
-async function setCartDiscount(userId, code, percent) {
-  const cartId = await getOrCreateCart(userId);
-
-  await pool.query(
-    `
-    UPDATE carts
-    SET discount_code=$1,
-        discount_percent=$2,
-        updated_at=NOW()
-    WHERE cart_id=$3
-    `,
-    [code, percent, cartId]
-  );
-}
-
-async function clearCartDiscount(userId) {
-  await pool.query(
-    `
-    UPDATE carts
-    SET discount_code=NULL,
-        discount_percent=0,
-        updated_at=NOW()
-    WHERE user_id=$1 AND status='open'
-    `,
-    [userId]
-  );
-}
-
-async function hasUserPlacedOrderBefore(userId) {
-  const res = await pool.query(
-    `SELECT 1 FROM orders WHERE user_id=$1 LIMIT 1`,
-    [userId]
-  );
-  return res.rows.length > 0;
-}
-
-function calculateDiscountedTotals(subtotal, shipping, discountPercent) {
-  const safePercent = Math.max(0, Math.min(100, Number(discountPercent || 0)));
-  const discountAmount = Math.round(subtotal * (safePercent / 100));
-  const total = subtotal - discountAmount + shipping;
-
-  return {
-    discountPercent: safePercent,
-    discountAmount,
-    total,
-  };
-}
-
-function money(pence) {
-  return `£${(pence / 100).toFixed(2)}`;
-}
-
-async function buildCartMessage(userId, heading = "✅ **Added to basket.**") {
-  const cart = await getCartSummary(userId);
-  const profile = await getUserShippingProfile(userId);
-  const shippingPence = getShippingPenceForCountry(profile?.country);
-
-  const discount = await getCartDiscount(userId);
-  const totals = calculateDiscountedTotals(
-    cart.subtotal_pence,
-    shippingPence,
-    discount.discount_percent
-  );
-
-  const basketLines = cart.items.map(
-    (it) => `• **${it.name}** (${it.size}, ${it.color}) × ${it.qty} — ${money(it.qty * it.price_pence)}`
-  );
-
-  let content =
-    `${heading}\n\n` +
-    `**Your basket**\n` +
-    `${basketLines.join("\n") || "_No items_"}\n\n` +
-    `**Subtotal:** ${money(cart.subtotal_pence)}\n`;
-
-  if (totals.discountAmount > 0) {
-    content += `**Discount (${discount.discount_code}):** -${money(totals.discountAmount)}\n`;
-  }
-
-  content +=
-    `**Shipping:** ${money(shippingPence)}\n` +
-    `**Total:** ${money(totals.total)}`;
-
-  return content;
-}
-
-/* ----------------------------- SHIPPING LOGIC ---------------------------- */
-
-const SHIPPING_UK_PENCE = 1000;
-const SHIPPING_EU_PENCE = 3500;
-const SHIPPING_USA_PENCE = 4500;
-
-function getShippingPenceForCountry(countryRaw) {
-  const c = String(countryRaw || "").trim().toLowerCase();
-  if (!c) return SHIPPING_EU_PENCE;
-
-  const isUK =
-    c.includes("uk") ||
-    c.includes("united kingdom") ||
-    c.includes("great britain") ||
-    c === "gb" ||
-    c.includes("england") ||
-    c.includes("scotland") ||
-    c.includes("wales") ||
-    c.includes("northern ireland");
-
-  if (isUK) return SHIPPING_UK_PENCE;
-
-  const isUSA = c.includes("usa") || c === "us" || c.includes("united states") || c.includes("america");
-  if (isUSA) return SHIPPING_USA_PENCE;
-
-  const europeKeywords = ["europe", "eu", "european"];
-  if (europeKeywords.some((k) => c.includes(k))) return SHIPPING_EU_PENCE;
-
-  const europeCountries = new Set([
-    "albania","andorra","austria","belarus","belgium","bosnia","bulgaria","croatia","cyprus","czech republic","czechia",
-    "denmark","estonia","finland","france","germany","greece","hungary","iceland","ireland","italy","kosovo","latvia","liechtenstein",
-    "lithuania","luxembourg","malta","moldova","monaco","montenegro","netherlands","north macedonia","norway","poland","portugal",
-    "romania","san marino","serbia","slovakia","slovenia","spain","sweden","switzerland","turkey","ukraine","vatican","vatican city",
-    "russia"
-  ]);
-
-  for (const name of europeCountries) {
-    if (c === name || c.includes(name)) return SHIPPING_EU_PENCE;
-  }
-
-  return SHIPPING_EU_PENCE;
-}
-
-async function getUserShippingProfile(userId) {
-  const res = await pool.query(
-    `
-    SELECT up.full_name, up.email, up.phone, sp.full_address, sp.country
-    FROM user_profiles up
-    JOIN shipping_profiles sp ON sp.user_id = up.user_id
-    WHERE up.user_id = $1
-    `,
-    [userId]
-  );
-  return res.rows[0] || null;
-}
+requireEnv("STAFF_ONLY_CHANNEL_ID", STAFF_ONLY_CHANNEL_ID);
 
 /* ----------------------------- SHOP CATALOG ----------------------------- */
 
@@ -518,15 +178,162 @@ const CATALOG = {
 
 const categoryOptions = Object.keys(CATALOG).map((cat) => ({ label: cat, value: cat }));
 
-/* ---------------------------- DISCORD CLIENT ---------------------------- */
+/* ----------------------------- DATABASE SETUP ---------------------------- */
 
-const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
-  partials: [Partials.Channel],
+const pool = new Pool({
+  connectionString: DATABASE_URL,
+  ssl: process.env.NODE_ENV === "production" ? { rejectUnauthorized: false } : false,
 });
+
+const SUBMIT_LOCKS = new Map();
+const SUBMIT_LOCK_MS = 15000;
+
+function isSubmitLocked(userId) {
+  const expiresAt = SUBMIT_LOCKS.get(userId);
+  return expiresAt && expiresAt > Date.now();
+}
+
+function setSubmitLock(userId) {
+  SUBMIT_LOCKS.set(userId, Date.now() + SUBMIT_LOCK_MS);
+}
+
+function clearSubmitLock(userId) {
+  SUBMIT_LOCKS.delete(userId);
+}
+
+async function initDb() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS user_profiles (
+      user_id TEXT PRIMARY KEY,
+      full_name TEXT,
+      email TEXT,
+      phone TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`ALTER TABLE IF EXISTS user_profiles ADD COLUMN IF NOT EXISTS email TEXT;`);
+  await pool.query(`ALTER TABLE IF EXISTS user_profiles ADD COLUMN IF NOT EXISTS phone TEXT;`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS shipping_profiles (
+      user_id TEXT PRIMARY KEY REFERENCES user_profiles(user_id) ON DELETE CASCADE,
+      full_address TEXT,
+      country TEXT,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`ALTER TABLE IF EXISTS shipping_profiles ADD COLUMN IF NOT EXISTS full_address TEXT;`);
+  await pool.query(`ALTER TABLE IF EXISTS shipping_profiles ADD COLUMN IF NOT EXISTS country TEXT;`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS carts (
+      cart_id BIGSERIAL PRIMARY KEY,
+      user_id TEXT UNIQUE NOT NULL,
+      status TEXT NOT NULL DEFAULT 'open',
+      discount_code TEXT,
+      discount_percent INT NOT NULL DEFAULT 0,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`ALTER TABLE IF EXISTS carts ADD COLUMN IF NOT EXISTS discount_code TEXT;`);
+  await pool.query(`ALTER TABLE IF EXISTS carts ADD COLUMN IF NOT EXISTS discount_percent INT NOT NULL DEFAULT 0;`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cart_items (
+      id BIGSERIAL PRIMARY KEY,
+      cart_id BIGINT NOT NULL REFERENCES carts(cart_id) ON DELETE CASCADE,
+      sku TEXT NOT NULL,
+      name TEXT NOT NULL,
+      size TEXT NOT NULL,
+      color TEXT NOT NULL,
+      qty INT NOT NULL CHECK (qty > 0),
+      price_pence INT NOT NULL CHECK (price_pence >= 0)
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS orders (
+      order_id BIGSERIAL PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      full_name TEXT,
+      email TEXT,
+      phone TEXT,
+      full_address TEXT,
+      country TEXT,
+      subtotal_pence INT NOT NULL,
+      shipping_pence INT NOT NULL,
+      total_pence INT NOT NULL,
+      discount_code TEXT,
+      discount_percent INT NOT NULL DEFAULT 0,
+      discount_amount_pence INT NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'pending',
+      receipt_channel_id TEXT,
+      payment_url TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`ALTER TABLE IF EXISTS orders ADD COLUMN IF NOT EXISTS email TEXT;`);
+  await pool.query(`ALTER TABLE IF EXISTS orders ADD COLUMN IF NOT EXISTS phone TEXT;`);
+  await pool.query(`ALTER TABLE IF EXISTS orders ADD COLUMN IF NOT EXISTS full_address TEXT;`);
+  await pool.query(`ALTER TABLE IF EXISTS orders ADD COLUMN IF NOT EXISTS country TEXT;`);
+  await pool.query(`ALTER TABLE IF EXISTS orders ADD COLUMN IF NOT EXISTS shipping_pence INT;`);
+  await pool.query(`ALTER TABLE IF EXISTS orders ADD COLUMN IF NOT EXISTS discount_code TEXT;`);
+  await pool.query(`ALTER TABLE IF EXISTS orders ADD COLUMN IF NOT EXISTS discount_percent INT NOT NULL DEFAULT 0;`);
+  await pool.query(`ALTER TABLE IF EXISTS orders ADD COLUMN IF NOT EXISTS discount_amount_pence INT NOT NULL DEFAULT 0;`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS order_items (
+      id BIGSERIAL PRIMARY KEY,
+      order_id BIGINT NOT NULL REFERENCES orders(order_id) ON DELETE CASCADE,
+      sku TEXT NOT NULL,
+      name TEXT NOT NULL,
+      size TEXT NOT NULL,
+      color TEXT NOT NULL,
+      qty INT NOT NULL CHECK (qty > 0),
+      price_pence INT NOT NULL CHECK (price_pence >= 0)
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS stock_items (
+      sku TEXT PRIMARY KEY,
+      item_name TEXT NOT NULL,
+      stock_qty INT NOT NULL DEFAULT 0,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+
+  for (const category of Object.keys(CATALOG)) {
+    for (const item of CATALOG[category]) {
+      await pool.query(
+        `
+        INSERT INTO stock_items (sku, item_name, stock_qty, updated_at)
+        VALUES ($1, $2, $3, NOW())
+        ON CONFLICT (sku) DO NOTHING
+        `,
+        [item.sku, item.name, item.stock_qty]
+      );
+    }
+  }
+}
+
+/* ------------------------------ HELPERS ------------------------------ */
+
+function money(pence) {
+  return `£${(pence / 100).toFixed(2)}`;
+}
 
 function isStaff(member) {
   return member?.roles?.cache?.has(STAFF_ROLE_ID);
+}
+
+function isStaffChannel(interaction) {
+  return interaction.channelId === STAFF_ONLY_CHANNEL_ID;
 }
 
 function safeChannelName(str) {
@@ -536,6 +343,260 @@ function safeChannelName(str) {
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "")
     .slice(0, 70);
+}
+
+function calculateDiscountedTotals(subtotal, shipping, discountPercent) {
+  const safePercent = Math.max(0, Math.min(100, Number(discountPercent || 0)));
+  const discountAmount = Math.round(subtotal * (safePercent / 100));
+  const total = subtotal - discountAmount + shipping;
+
+  return {
+    discountPercent: safePercent,
+    discountAmount,
+    total,
+  };
+}
+
+async function getStockForSku(sku) {
+  const res = await pool.query(`SELECT stock_qty FROM stock_items WHERE sku=$1`, [sku]);
+  if (!res.rows.length) return 0;
+  return Number(res.rows[0].stock_qty || 0);
+}
+
+async function getCartQtyForSku(userId, sku) {
+  const res = await pool.query(
+    `
+    SELECT COALESCE(SUM(ci.qty), 0) AS qty
+    FROM carts c
+    JOIN cart_items ci ON ci.cart_id = c.cart_id
+    WHERE c.user_id = $1 AND c.status='open' AND ci.sku = $2
+    `,
+    [userId, sku]
+  );
+  return Number(res.rows[0]?.qty || 0);
+}
+
+async function upsertProfile(userId, fullName, email, phone, shipping) {
+  await pool.query(
+    `
+    INSERT INTO user_profiles (user_id, full_name, email, phone, updated_at)
+    VALUES ($1, $2, $3, $4, NOW())
+    ON CONFLICT (user_id) DO UPDATE
+    SET full_name = EXCLUDED.full_name,
+        email = EXCLUDED.email,
+        phone = EXCLUDED.phone,
+        updated_at = NOW();
+    `,
+    [userId, fullName, email, phone]
+  );
+
+  await pool.query(
+    `
+    INSERT INTO shipping_profiles (user_id, full_address, country, updated_at)
+    VALUES ($1, $2, $3, NOW())
+    ON CONFLICT (user_id) DO UPDATE
+    SET full_address = EXCLUDED.full_address,
+        country = EXCLUDED.country,
+        updated_at = NOW();
+    `,
+    [userId, shipping.full_address, shipping.country]
+  );
+}
+
+async function getOrCreateCart(userId) {
+  const existing = await pool.query(`SELECT cart_id FROM carts WHERE user_id=$1 AND status='open'`, [userId]);
+  if (existing.rows.length) return existing.rows[0].cart_id;
+
+  const created = await pool.query(
+    `INSERT INTO carts (user_id, status, discount_code, discount_percent, updated_at)
+     VALUES ($1, 'open', NULL, 0, NOW())
+     RETURNING cart_id`,
+    [userId]
+  );
+  return created.rows[0].cart_id;
+}
+
+async function addCartItem(userId, item) {
+  const stockQty = await getStockForSku(item.sku);
+  const existingCartQty = await getCartQtyForSku(userId, item.sku);
+
+  if (existingCartQty + item.qty > stockQty) {
+    throw new Error(`Only ${stockQty} in stock for ${item.name}.`);
+  }
+
+  const cartId = await getOrCreateCart(userId);
+  await pool.query(
+    `
+    INSERT INTO cart_items (cart_id, sku, name, size, color, qty, price_pence)
+    VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `,
+    [cartId, item.sku, item.name, item.size, item.color, item.qty, item.price_pence]
+  );
+}
+
+async function clearCart(userId) {
+  const cart = await pool.query(`SELECT cart_id FROM carts WHERE user_id=$1 AND status='open'`, [userId]);
+  if (!cart.rows.length) return;
+
+  const cartId = cart.rows[0].cart_id;
+  await pool.query(`DELETE FROM cart_items WHERE cart_id=$1`, [cartId]);
+  await pool.query(`DELETE FROM carts WHERE cart_id=$1`, [cartId]);
+}
+
+async function getCartSummary(userId) {
+  const cart = await pool.query(`SELECT cart_id FROM carts WHERE user_id=$1 AND status='open'`, [userId]);
+  if (!cart.rows.length) return { items: [], subtotal_pence: 0 };
+
+  const cartId = cart.rows[0].cart_id;
+  const itemsRes = await pool.query(
+    `SELECT sku, name, size, color, qty, price_pence FROM cart_items WHERE cart_id=$1 ORDER BY id ASC`,
+    [cartId]
+  );
+
+  const items = itemsRes.rows;
+  const subtotal_pence = items.reduce((sum, it) => sum + it.qty * it.price_pence, 0);
+  return { items, subtotal_pence };
+}
+
+async function getCartDiscount(userId) {
+  const res = await pool.query(
+    `SELECT discount_code, discount_percent FROM carts WHERE user_id=$1 AND status='open'`,
+    [userId]
+  );
+
+  if (!res.rows.length) {
+    return { discount_code: null, discount_percent: 0 };
+  }
+
+  return {
+    discount_code: res.rows[0].discount_code || null,
+    discount_percent: Number(res.rows[0].discount_percent || 0),
+  };
+}
+
+async function setCartDiscount(userId, code, percent) {
+  const cartId = await getOrCreateCart(userId);
+
+  await pool.query(
+    `
+    UPDATE carts
+    SET discount_code=$1,
+        discount_percent=$2,
+        updated_at=NOW()
+    WHERE cart_id=$3
+    `,
+    [code, percent, cartId]
+  );
+}
+
+async function clearCartDiscount(userId) {
+  await pool.query(
+    `
+    UPDATE carts
+    SET discount_code=NULL,
+        discount_percent=0,
+        updated_at=NOW()
+    WHERE user_id=$1 AND status='open'
+    `,
+    [userId]
+  );
+}
+
+async function hasUserPlacedOrderBefore(userId) {
+  const res = await pool.query(`SELECT 1 FROM orders WHERE user_id=$1 LIMIT 1`, [userId]);
+  return res.rows.length > 0;
+}
+
+async function hasUserPendingOrder(userId) {
+  const res = await pool.query(
+    `
+    SELECT 1
+    FROM orders
+    WHERE user_id = $1
+      AND status IN ('pending', 'paid')
+    LIMIT 1
+    `,
+    [userId]
+  );
+  return res.rows.length > 0;
+}
+
+async function getUserShippingProfile(userId) {
+  const res = await pool.query(
+    `
+    SELECT up.full_name, up.email, up.phone, sp.full_address, sp.country
+    FROM user_profiles up
+    JOIN shipping_profiles sp ON sp.user_id = up.user_id
+    WHERE up.user_id = $1
+    `,
+    [userId]
+  );
+  return res.rows[0] || null;
+}
+
+async function buildCartMessage(userId, heading = "✅ **Added to basket.**") {
+  const cart = await getCartSummary(userId);
+  const profile = await getUserShippingProfile(userId);
+  const shippingPence = getShippingPenceForCountry(profile?.country);
+
+  const discount = await getCartDiscount(userId);
+  const totals = calculateDiscountedTotals(
+    cart.subtotal_pence,
+    shippingPence,
+    discount.discount_percent
+  );
+
+  const basketLines = [];
+  for (const it of cart.items) {
+    const stockQty = await getStockForSku(it.sku);
+    basketLines.push(
+      `• **${it.name}** (${it.size}, ${it.color}) × ${it.qty} — ${money(it.qty * it.price_pence)} _[Stock: ${stockQty}]_`
+    );
+  }
+
+  let content =
+    `${heading}\n\n` +
+    `**Your basket**\n` +
+    `${basketLines.join("\n") || "_No items_"}\n\n` +
+    `**Subtotal:** ${money(cart.subtotal_pence)}\n`;
+
+  if (totals.discountAmount > 0) {
+    content += `**Discount (${discount.discount_code}):** -${money(totals.discountAmount)}\n`;
+  }
+
+  content +=
+    `**Shipping:** ${money(shippingPence)}\n` +
+    `**Total:** ${money(totals.total)}`;
+
+  return content;
+}
+
+/* ----------------------------- SHIPPING LOGIC ---------------------------- */
+
+const SHIPPING_UK_PENCE = 1000;
+const SHIPPING_EU_PENCE = 3500;
+const SHIPPING_USA_PENCE = 4500;
+
+function getShippingPenceForCountry(countryRaw) {
+  const c = String(countryRaw || "").trim().toLowerCase();
+  if (!c) return SHIPPING_EU_PENCE;
+
+  const isUK =
+    c.includes("uk") ||
+    c.includes("united kingdom") ||
+    c.includes("great britain") ||
+    c === "gb" ||
+    c.includes("england") ||
+    c.includes("scotland") ||
+    c.includes("wales") ||
+    c.includes("northern ireland");
+
+  if (isUK) return SHIPPING_UK_PENCE;
+
+  const isUSA = c.includes("usa") || c === "us" || c.includes("united states") || c.includes("america");
+  if (isUSA) return SHIPPING_USA_PENCE;
+
+  return SHIPPING_EU_PENCE;
 }
 
 /* -------------------------- SLASH COMMAND SETUP -------------------------- */
@@ -549,6 +610,11 @@ const commands = [
   new SlashCommandBuilder()
     .setName("setupverify")
     .setDescription("Post/refresh the verification panel in the verify channel")
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+
+  new SlashCommandBuilder()
+    .setName("setupstaffpanel")
+    .setDescription("Post/refresh the staff control panel in the staff-only channel")
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
 
   new SlashCommandBuilder()
@@ -582,46 +648,62 @@ function categorySelectComponents() {
   ];
 }
 
-function itemSelectComponents(category) {
+async function itemSelectComponents(category) {
   const items = CATALOG[category] || [];
+  const options = [];
+
+  for (const it of items) {
+    const stockQty = await getStockForSku(it.sku);
+    options.push({
+      label: `${it.name} — ${money(it.price_pence)} — Stock ${stockQty}`.slice(0, 100),
+      value: it.sku,
+      description: stockQty > 0 ? `Available: ${stockQty}` : "Out of stock",
+    });
+  }
+
   return [
     new ActionRowBuilder().addComponents(
       new StringSelectMenuBuilder()
         .setCustomId(`select_item:${category}`)
         .setPlaceholder("Choose an item…")
-        .addOptions(
-          items.map((it) => ({
-            label: `${it.name} — ${money(it.price_pence)}`.slice(0, 100),
-            value: it.sku,
-          }))
-        )
+        .addOptions(options)
     ),
   ];
 }
 
-function qtyButtonsComponents(category, sku) {
-  const row1 = new ActionRowBuilder().addComponents(
-    ...[1, 2, 3, 4, 5].map((n) =>
+async function qtyButtonsComponents(category, sku) {
+  const stockQty = await getStockForSku(sku);
+  const maxQuickQty = Math.min(stockQty, 5);
+  const quickButtons = [];
+
+  for (let n = 1; n <= maxQuickQty; n += 1) {
+    quickButtons.push(
       new ButtonBuilder()
         .setCustomId(`add_qty:${category}:${sku}:${n}`)
         .setLabel(String(n))
         .setStyle(ButtonStyle.Secondary)
-    )
-  );
+    );
+  }
+
+  const row1 = new ActionRowBuilder().addComponents(...quickButtons);
 
   const row2 = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(`add_qty_other:${category}:${sku}`).setLabel("Other…").setStyle(ButtonStyle.Primary)
+    new ButtonBuilder()
+      .setCustomId(`add_qty_other:${category}:${sku}`)
+      .setLabel("Other…")
+      .setStyle(ButtonStyle.Primary)
+      .setDisabled(stockQty <= 0)
   );
 
   return [row1, row2];
 }
 
-function cartActionsComponents() {
+function cartActionsComponents(disableSubmit = false) {
   return [
     new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId("cart_add_more").setLabel("Add Another Item").setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId("cart_discount").setLabel("Apply Discount Code").setStyle(ButtonStyle.Primary),
-      new ButtonBuilder().setCustomId("cart_submit").setLabel("Submit Order ✅").setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId("cart_submit").setLabel("Submit Order ✅").setStyle(ButtonStyle.Success).setDisabled(disableSubmit),
       new ButtonBuilder().setCustomId("cart_clear").setLabel("Clear Cart").setStyle(ButtonStyle.Danger)
     ),
   ];
@@ -630,20 +712,20 @@ function cartActionsComponents() {
 function verifyPanelComponents() {
   const embed = new EmbedBuilder()
     .setTitle("Server Verification")
-  .setDescription(
-  [
-    "To access the full server, click the button below and complete the form.",
-    "",
-    "All fields are required:",
-    "• Full name",
-    "• How you heard about us",
-    "• Referral / who sent you",
-    "• Email address",
-    "• Phone number",
-    "",
-    "Failure to complete the form correctly may affect whether you are verified."
-  ].join("\n")
-);
+    .setDescription(
+      [
+        "To access the full server, click the button below and complete the form.",
+        "",
+        "All fields are required:",
+        "• Full name",
+        "• How you heard about us",
+        "• Referral / who sent you",
+        "• Email address",
+        "• Phone number",
+        "",
+        "Failure to complete the form correctly may affect whether you are verified."
+      ].join("\n")
+    );
 
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
@@ -664,6 +746,38 @@ function verifyApproveComponents(userId) {
         .setStyle(ButtonStyle.Success)
     ),
   ];
+}
+
+function staffPanelComponents() {
+  const embed = new EmbedBuilder()
+    .setTitle("Staff Control Panel")
+    .setDescription(
+      [
+        "Use the buttons below to manage the mock shop.",
+        "",
+        "Available actions:",
+        "• Adjust stock",
+        "• Lookup an order",
+        "• Restock all items to default"
+      ].join("\n")
+    );
+
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId("staff_open_stock_modal")
+      .setLabel("Adjust Stock")
+      .setStyle(ButtonStyle.Primary),
+    new ButtonBuilder()
+      .setCustomId("staff_open_orderlookup_modal")
+      .setLabel("Lookup Order")
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId("staff_restock_all_confirm")
+      .setLabel("Restock All")
+      .setStyle(ButtonStyle.Danger)
+  );
+
+  return { embed, row };
 }
 
 /* -------------------------- MODALS (MAX 5 INPUTS) ------------------------- */
@@ -789,17 +903,46 @@ function verifyModal() {
   return modal;
 }
 
-// Old flow kept (not used in UI anymore)
-function paymentLinkModal(orderId) {
-  const modal = new ModalBuilder().setCustomId(`paylink_modal:${orderId}`).setTitle("Add payment link");
+function staffStockModal() {
+  const modal = new ModalBuilder()
+    .setCustomId("staff_stock_modal")
+    .setTitle("Adjust Stock");
 
-  const url = new TextInputBuilder()
-    .setCustomId("payment_url")
-    .setLabel("Payment URL (Stripe / PayPal / etc.)")
+  const skuInput = new TextInputBuilder()
+    .setCustomId("stock_sku")
+    .setLabel("SKU")
     .setStyle(TextInputStyle.Short)
-    .setRequired(true);
+    .setRequired(true)
+    .setPlaceholder("Example: A01");
 
-  modal.addComponents(new ActionRowBuilder().addComponents(url));
+  const qtyInput = new TextInputBuilder()
+    .setCustomId("stock_qty")
+    .setLabel("New stock quantity")
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+    .setPlaceholder("Example: 25");
+
+  modal.addComponents(
+    new ActionRowBuilder().addComponents(skuInput),
+    new ActionRowBuilder().addComponents(qtyInput)
+  );
+
+  return modal;
+}
+
+function staffOrderLookupModal() {
+  const modal = new ModalBuilder()
+    .setCustomId("staff_orderlookup_modal")
+    .setTitle("Lookup Order");
+
+  const orderIdInput = new TextInputBuilder()
+    .setCustomId("lookup_order_id")
+    .setLabel("Order ID")
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+    .setPlaceholder("Example: 12");
+
+  modal.addComponents(new ActionRowBuilder().addComponents(orderIdInput));
   return modal;
 }
 
@@ -838,12 +981,13 @@ function bankDetailsText(orderId) {
   );
 }
 
-function receiptEmbed(orderId, items, subtotal, discountAmount, discountCode, shipping, total, shippingProfile) {
+function receiptEmbed(orderId, items, subtotal, discountAmount, discountCode, shipping, total, shippingProfile, status = "pending") {
   const lines = items.map(
     (it) => `• **${it.name}** (${it.size}, ${it.color}) × ${it.qty} — ${money(it.qty * it.price_pence)}`
   );
 
   const fields = [
+    { name: "Status", value: status, inline: true },
     { name: "Subtotal", value: money(subtotal), inline: true },
   ];
 
@@ -874,34 +1018,39 @@ function receiptEmbed(orderId, items, subtotal, discountAmount, discountCode, sh
         `Once paid, a staff member will confirm and mark the order as paid.\n\n` +
         bankDetailsText(orderId),
     },
-    { name: "Dispatch", value: "Cut-off: **15:30 (Mon–Fri Dispatch)**" },
-    {
-      name: "Overseas disclaimer",
-      value: "Shipping is at your own risk. No reships or refunds for customs seizures. By ordering, you accept these terms.",
-    },
-    {
-      name: "IMPORTANT — Payment Reference",
-      value:
-        "PLEASE NOTE- if you use any other reference when making the payment or mention a product as the reference, the order will be cancelled and your money will not be refunded. Please ensure that the reference number is as per The invoice/order summary",
-    }
+    { name: "Dispatch", value: "Cut-off: **15:30 (Mon–Fri Dispatch)**" }
   );
 
   return new EmbedBuilder()
     .setTitle(`${STORE_NAME} — Receipt (Order #${orderId})`)
     .setDescription(lines.join("\n") || "_No items_")
     .addFields(fields)
-    .setFooter({ text: "Pay by bank transfer using the reference shown above." });
+    .setFooter({ text: "Demo shop flow." });
 }
 
-function staffReceiptControls(orderId) {
+function staffReceiptControls(orderId, status = "pending") {
   return [
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`staff_mark_paid:${orderId}`).setLabel("Mark as paid ✅").setStyle(ButtonStyle.Success)
+      new ButtonBuilder()
+        .setCustomId(`staff_mark_paid:${orderId}`)
+        .setLabel("Mark as paid ✅")
+        .setStyle(ButtonStyle.Success)
+        .setDisabled(status === "paid" || status === "dispatched"),
+      new ButtonBuilder()
+        .setCustomId(`staff_mark_dispatched:${orderId}`)
+        .setLabel("Mark as dispatched 📦")
+        .setStyle(ButtonStyle.Primary)
+        .setDisabled(status === "dispatched")
     ),
   ];
 }
 
 /* ------------------------------ INTERACTIONS ----------------------------- */
+
+const client = new Client({
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
+  partials: [Partials.Channel],
+});
 
 client.on("interactionCreate", async (interaction) => {
   let deferred = false;
@@ -929,7 +1078,7 @@ client.on("interactionCreate", async (interaction) => {
           `6) Submit your order when you're done\n\n` +
           `**Shipping:** UK Tracked £10 • Europe £35 • USA £45\n` +
           `**Cut-off:** 15:30 (Mon–Fri Dispatch)\n\n` +
-          `Once submitted, you'll receive a **private receipt channel** with **bank transfer details** to pay.`;
+          `This is a **generic mock shop draft** with stock control, duplicate order protection, dispatch controls, and a staff admin panel.`;
 
         await menuChannel.send({ content, components: menuMessageComponents() });
 
@@ -954,9 +1103,26 @@ client.on("interactionCreate", async (interaction) => {
 
         return interaction.editReply(`✅ Verification panel posted in <#${VERIFY_CHANNEL_ID}>.`);
       }
-    }
 
-    /* ------------------------------ BUTTONS ------------------------------ */
+      if (interaction.commandName === "setupstaffpanel") {
+        await interaction.deferReply({ ephemeral: true });
+        deferred = true;
+
+        const staffChannel = await client.channels.fetch(STAFF_ONLY_CHANNEL_ID).catch(() => null);
+        if (!staffChannel) {
+          return interaction.editReply("❌ Could not find the staff-only channel. Check STAFF_ONLY_CHANNEL_ID.");
+        }
+
+        const { embed, row } = staffPanelComponents();
+
+        await staffChannel.send({
+          embeds: [embed],
+          components: [row],
+        });
+
+        return interaction.editReply(`✅ Staff panel posted in <#${STAFF_ONLY_CHANNEL_ID}>.`);
+      }
+    }
 
     if (interaction.isButton()) {
       const { customId } = interaction;
@@ -1011,11 +1177,71 @@ client.on("interactionCreate", async (interaction) => {
 
         try {
           await member.send(`✅ You have been verified in **${guild.name}** and should now have access to the full server.`);
-        } catch {
-          // ignore DM failures
-        }
+        } catch {}
 
         return;
+      }
+
+      if (customId === "staff_open_stock_modal") {
+        if (!isStaff(interaction.member)) {
+          return interaction.reply({ content: "Staff only.", ephemeral: true });
+        }
+        if (!isStaffChannel(interaction)) {
+          return interaction.reply({ content: "Use this in the staff-only channel.", ephemeral: true });
+        }
+        return interaction.showModal(staffStockModal());
+      }
+
+      if (customId === "staff_open_orderlookup_modal") {
+        if (!isStaff(interaction.member)) {
+          return interaction.reply({ content: "Staff only.", ephemeral: true });
+        }
+        if (!isStaffChannel(interaction)) {
+          return interaction.reply({ content: "Use this in the staff-only channel.", ephemeral: true });
+        }
+        return interaction.showModal(staffOrderLookupModal());
+      }
+
+      if (customId === "staff_restock_all_confirm") {
+        if (!isStaff(interaction.member)) {
+          return interaction.reply({ content: "Staff only.", ephemeral: true });
+        }
+        if (!isStaffChannel(interaction)) {
+          return interaction.reply({ content: "Use this in the staff-only channel.", ephemeral: true });
+        }
+
+        return interaction.reply({
+          content: "Are you sure you want to restock all items back to default values?",
+          components: [
+            new ActionRowBuilder().addComponents(
+              new ButtonBuilder()
+                .setCustomId("staff_restock_all_execute")
+                .setLabel("Yes, restock all")
+                .setStyle(ButtonStyle.Danger)
+            ),
+          ],
+          ephemeral: true,
+        });
+      }
+
+      if (customId === "staff_restock_all_execute") {
+        if (!isStaff(interaction.member)) {
+          return interaction.reply({ content: "Staff only.", ephemeral: true });
+        }
+
+        for (const category of Object.keys(CATALOG)) {
+          for (const item of CATALOG[category]) {
+            await pool.query(
+              `UPDATE stock_items SET stock_qty=$1, item_name=$2, updated_at=NOW() WHERE sku=$3`,
+              [item.stock_qty, item.name, item.sku]
+            );
+          }
+        }
+
+        return interaction.update({
+          content: "✅ All stock reset to default values.",
+          components: [],
+        });
       }
 
       if (customId.startsWith("add_qty:")) {
@@ -1024,6 +1250,11 @@ client.on("interactionCreate", async (interaction) => {
 
         const item = (CATALOG[category] || []).find((x) => x.sku === sku);
         if (!item) return interaction.reply({ content: "Item not found.", ephemeral: true });
+
+        const stockQty = await getStockForSku(item.sku);
+        if (stockQty <= 0) {
+          return interaction.reply({ content: "That item is out of stock.", ephemeral: true });
+        }
 
         await addCartItem(interaction.user.id, {
           sku: item.sku,
@@ -1076,117 +1307,149 @@ client.on("interactionCreate", async (interaction) => {
       }
 
       if (customId === "cart_submit") {
-        const cart = await getCartSummary(interaction.user.id);
-        if (!cart.items.length) return interaction.reply({ content: "Your cart is empty.", ephemeral: true });
-
-        const shippingProfile = await getUserShippingProfile(interaction.user.id);
-        if (!shippingProfile) {
+        if (isSubmitLocked(interaction.user.id)) {
           return interaction.reply({
-            content: "I don't have your shipping details yet. Click the menu button again and enter your details.",
+            content: "Your order is already being processed. Please wait a few seconds.",
             ephemeral: true,
           });
         }
 
-        const subtotal = cart.subtotal_pence;
-        const shipping = getShippingPenceForCountry(shippingProfile.country);
+        setSubmitLock(interaction.user.id);
 
-        const discount = await getCartDiscount(interaction.user.id);
-
-        if (discount.discount_code) {
-          const hasOrderedBefore = await hasUserPlacedOrderBefore(interaction.user.id);
-          if (hasOrderedBefore) {
-            await clearCartDiscount(interaction.user.id);
+        try {
+          const existingPendingOrder = await hasUserPendingOrder(interaction.user.id);
+          if (existingPendingOrder) {
             return interaction.reply({
-              content: "That welcome code is only valid on your first order and cannot be used here.",
+              content: "You already have an order awaiting completion. Please contact staff if needed.",
               ephemeral: true,
             });
           }
-        }
 
-        const totals = calculateDiscountedTotals(subtotal, shipping, discount.discount_percent);
-        const total = totals.total;
+          const cart = await getCartSummary(interaction.user.id);
+          if (!cart.items.length) {
+            return interaction.reply({ content: "Your cart is empty.", ephemeral: true });
+          }
 
-        const orderRes = await pool.query(
-          `
-          INSERT INTO orders (
-            user_id, full_name, email, phone, full_address, country,
-            subtotal_pence, shipping_pence, total_pence, discount_code,
-            discount_percent, discount_amount_pence, status
-          )
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'pending')
-          RETURNING order_id
-          `,
-          [
-            interaction.user.id,
-            shippingProfile.full_name,
-            shippingProfile.email,
-            shippingProfile.phone,
-            shippingProfile.full_address,
-            shippingProfile.country,
-            subtotal,
-            shipping,
-            total,
-            discount.discount_code,
-            discount.discount_percent,
-            totals.discountAmount,
-          ]
-        );
+          const shippingProfile = await getUserShippingProfile(interaction.user.id);
+          if (!shippingProfile) {
+            return interaction.reply({
+              content: "I don't have your shipping details yet. Click the menu button again and enter your details.",
+              ephemeral: true,
+            });
+          }
 
-        const orderId = orderRes.rows[0].order_id;
+          for (const it of cart.items) {
+            const stockQty = await getStockForSku(it.sku);
+            if (it.qty > stockQty) {
+              return interaction.reply({
+                content: `Stock changed. Only ${stockQty} left for ${it.name}. Please update your basket and try again.`,
+                ephemeral: true,
+              });
+            }
+          }
 
-        for (const it of cart.items) {
-          await pool.query(
+          const subtotal = cart.subtotal_pence;
+          const shipping = getShippingPenceForCountry(shippingProfile.country);
+
+          const discount = await getCartDiscount(interaction.user.id);
+
+          if (discount.discount_code) {
+            const hasOrderedBefore = await hasUserPlacedOrderBefore(interaction.user.id);
+            if (hasOrderedBefore) {
+              await clearCartDiscount(interaction.user.id);
+              return interaction.reply({
+                content: "That welcome code is only valid on your first order and cannot be used here.",
+                ephemeral: true,
+              });
+            }
+          }
+
+          const totals = calculateDiscountedTotals(subtotal, shipping, discount.discount_percent);
+          const total = totals.total;
+
+          const orderRes = await pool.query(
             `
-            INSERT INTO order_items (order_id, sku, name, size, color, qty, price_pence)
-            VALUES ($1,$2,$3,$4,$5,$6,$7)
+            INSERT INTO orders (
+              user_id, full_name, email, phone, full_address, country,
+              subtotal_pence, shipping_pence, total_pence, discount_code,
+              discount_percent, discount_amount_pence, status
+            )
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'pending')
+            RETURNING order_id
             `,
-            [orderId, it.sku, it.name, it.size, it.color, it.qty, it.price_pence]
-          );
-        }
-
-        const guild = interaction.guild;
-        const receiptChannel = await createReceiptChannel(guild, interaction.user, orderId);
-
-        await pool.query(`UPDATE orders SET receipt_channel_id=$1 WHERE order_id=$2`, [receiptChannel.id, orderId]);
-
-        await receiptChannel.send({
-          content:
-            `<@${interaction.user.id}> **Thanks!** Your order has been received.\n\n` +
-            `✅ Please pay by **bank transfer** using the details in the receipt below.\n` +
-            `<@&${STAFF_ROLE_ID}> once confirmed, please mark as paid.`,
-          embeds: [
-            receiptEmbed(
-              orderId,
-              cart.items,
+            [
+              interaction.user.id,
+              shippingProfile.full_name,
+              shippingProfile.email,
+              shippingProfile.phone,
+              shippingProfile.full_address,
+              shippingProfile.country,
               subtotal,
-              totals.discountAmount,
-              discount.discount_code,
               shipping,
               total,
-              shippingProfile
-            ),
-          ],
-          components: staffReceiptControls(orderId),
-        });
+              discount.discount_code,
+              discount.discount_percent,
+              totals.discountAmount,
+            ]
+          );
 
-        await clearCart(interaction.user.id);
+          const orderId = orderRes.rows[0].order_id;
 
-        return interaction.update({
-          content: `✅ Order submitted! Your private receipt channel is: <#${receiptChannel.id}>`,
-          components: [],
-        });
-      }
+          for (const it of cart.items) {
+            await pool.query(
+              `
+              INSERT INTO order_items (order_id, sku, name, size, color, qty, price_pence)
+              VALUES ($1,$2,$3,$4,$5,$6,$7)
+              `,
+              [orderId, it.sku, it.name, it.size, it.color, it.qty, it.price_pence]
+            );
 
-      // Old flow kept (button no longer shown)
-      if (customId.startsWith("staff_add_paylink:")) {
-        const [, orderIdStr] = customId.split(":");
-        const orderId = parseInt(orderIdStr, 10);
+            await pool.query(
+              `
+              UPDATE stock_items
+              SET stock_qty = stock_qty - $1,
+                  updated_at = NOW()
+              WHERE sku = $2 AND stock_qty >= $1
+              `,
+              [it.qty, it.sku]
+            );
+          }
 
-        if (!isStaff(interaction.member)) {
-          return interaction.reply({ content: "Staff only.", ephemeral: true });
+          const guild = interaction.guild;
+          const receiptChannel = await createReceiptChannel(guild, interaction.user, orderId);
+
+          await pool.query(`UPDATE orders SET receipt_channel_id=$1 WHERE order_id=$2`, [receiptChannel.id, orderId]);
+
+          await receiptChannel.send({
+            content:
+              `<@${interaction.user.id}> **Thanks!** Your order has been received.\n\n` +
+              `✅ Please pay by **bank transfer** using the details in the receipt below.\n` +
+              `<@&${STAFF_ROLE_ID}> once confirmed, please mark as paid or dispatched when appropriate.`,
+            embeds: [
+              receiptEmbed(
+                orderId,
+                cart.items,
+                subtotal,
+                totals.discountAmount,
+                discount.discount_code,
+                shipping,
+                total,
+                shippingProfile,
+                "pending"
+              ),
+            ],
+            components: staffReceiptControls(orderId, "pending"),
+          });
+
+          await clearCart(interaction.user.id);
+
+          return interaction.update({
+            content: `✅ Order submitted! Your private receipt channel is: <#${receiptChannel.id}>`,
+            components: [],
+          });
+        } finally {
+          clearSubmitLock(interaction.user.id);
         }
-
-        return interaction.showModal(paymentLinkModal(orderId));
       }
 
       if (customId.startsWith("staff_mark_paid:")) {
@@ -1199,20 +1462,44 @@ client.on("interactionCreate", async (interaction) => {
 
         await pool.query(`UPDATE orders SET status='paid' WHERE order_id=$1`, [orderId]);
 
-        return interaction.reply({ content: `✅ Order #${orderId} marked as paid.`, ephemeral: false });
+        return interaction.update({
+          content: `✅ Order #${orderId} marked as paid.`,
+          embeds: interaction.message.embeds,
+          components: staffReceiptControls(orderId, "paid"),
+        });
+      }
+
+      if (customId.startsWith("staff_mark_dispatched:")) {
+        const [, orderIdStr] = customId.split(":");
+        const orderId = parseInt(orderIdStr, 10);
+
+        if (!isStaff(interaction.member)) {
+          return interaction.reply({ content: "Staff only.", ephemeral: true });
+        }
+
+        await pool.query(`UPDATE orders SET status='dispatched' WHERE order_id=$1`, [orderId]);
+
+        await interaction.update({
+          content: `📦 Order #${orderId} marked as dispatched.`,
+          embeds: interaction.message.embeds,
+          components: staffReceiptControls(orderId, "dispatched"),
+        });
+
+        await interaction.channel.send(`📦 Order #${orderId} has been marked as dispatched.`);
+        return;
       }
     }
-
-    /* ------------------------------ SELECT MENUS ------------------------------ */
 
     if (interaction.isStringSelectMenu()) {
       const { customId } = interaction;
 
       if (customId === "select_category") {
         const category = interaction.values[0];
+        const itemComponents = await itemSelectComponents(category);
+
         return interaction.update({
           content: "Now choose an item:",
-          components: itemSelectComponents(category),
+          components: itemComponents,
         });
       }
 
@@ -1220,14 +1507,22 @@ client.on("interactionCreate", async (interaction) => {
         const [, category] = customId.split(":");
         const sku = interaction.values[0];
 
+        const stockQty = await getStockForSku(sku);
+        if (stockQty <= 0) {
+          return interaction.reply({
+            content: "That item is out of stock.",
+            ephemeral: true,
+          });
+        }
+
+        const qtyComponents = await qtyButtonsComponents(category, sku);
+
         return interaction.update({
-          content: "Selected item — how many?",
-          components: qtyButtonsComponents(category, sku),
+          content: `Selected item — how many? (In stock: ${stockQty})`,
+          components: qtyComponents,
         });
       }
     }
-
-    /* ------------------------------ MODAL SUBMITS ------------------------------ */
 
     if (interaction.isModalSubmit()) {
       const { customId } = interaction;
@@ -1252,78 +1547,170 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
-if (customId === "verify_submit_modal") {
-  const submittedName = interaction.fields.getTextInputValue("verify_name")?.trim();
-  const foundUs = interaction.fields.getTextInputValue("verify_found")?.trim();
-  const referral = interaction.fields.getTextInputValue("verify_referral")?.trim();
-  const email = interaction.fields.getTextInputValue("verify_email")?.trim();
-  const phone = interaction.fields.getTextInputValue("verify_phone")?.trim();
+      if (customId === "verify_submit_modal") {
+        const submittedName = interaction.fields.getTextInputValue("verify_name")?.trim();
+        const foundUs = interaction.fields.getTextInputValue("verify_found")?.trim();
+        const referral = interaction.fields.getTextInputValue("verify_referral")?.trim();
+        const email = interaction.fields.getTextInputValue("verify_email")?.trim();
+        const phone = interaction.fields.getTextInputValue("verify_phone")?.trim();
 
-  if (!submittedName || !foundUs || !referral || !email || !phone) {
-    return interaction.reply({
-      content: "All verification fields are required.",
-      ephemeral: true,
-    });
-  }
+        if (!submittedName || !foundUs || !referral || !email || !phone) {
+          return interaction.reply({
+            content: "All verification fields are required.",
+            ephemeral: true,
+          });
+        }
 
-  const emailLooksValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-  if (!emailLooksValid) {
-    return interaction.reply({
-      content: "Please enter a valid email address.",
-      ephemeral: true,
-    });
-  }
+        const emailLooksValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+        if (!emailLooksValid) {
+          return interaction.reply({
+            content: "Please enter a valid email address.",
+            ephemeral: true,
+          });
+        }
 
-  const phoneClean = phone.replace(/[^\d+]/g, "");
-  if (phoneClean.length < 7) {
-    return interaction.reply({
-      content: "Please enter a valid phone number.",
-      ephemeral: true,
-    });
-  }
+        const phoneClean = phone.replace(/[^\d+]/g, "");
+        if (phoneClean.length < 7) {
+          return interaction.reply({
+            content: "Please enter a valid phone number.",
+            ephemeral: true,
+          });
+        }
 
-  const logChannel = await interaction.guild.channels.fetch(VERIFICATION_LOG_CHANNEL_ID).catch(() => null);
-  if (!logChannel) {
-    return interaction.reply({
-      content: "Could not find the verification log channel. Check VERIFICATION_LOG_CHANNEL_ID.",
-      ephemeral: true,
-    });
-  }
+        const logChannel = await interaction.guild.channels.fetch(VERIFICATION_LOG_CHANNEL_ID).catch(() => null);
+        if (!logChannel) {
+          return interaction.reply({
+            content: "Could not find the verification log channel. Check VERIFICATION_LOG_CHANNEL_ID.",
+            ephemeral: true,
+          });
+        }
 
-  const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
-  if (member?.roles?.cache?.has(VERIFIED_ROLE_ID)) {
-    return interaction.reply({
-      content: "You are already verified.",
-      ephemeral: true,
-    });
-  }
+        const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
+        if (member?.roles?.cache?.has(VERIFIED_ROLE_ID)) {
+          return interaction.reply({
+            content: "You are already verified.",
+            ephemeral: true,
+          });
+        }
 
-  const embed = new EmbedBuilder()
-    .setTitle("New Verification Submission")
-    .addFields(
-      { name: "User", value: `<@${interaction.user.id}>` },
-      { name: "Username", value: `${interaction.user.tag}` },
-      { name: "User ID", value: interaction.user.id },
-      { name: "Full name", value: submittedName },
-      { name: "How they heard about us", value: foundUs },
-      { name: "Referral / who sent them", value: referral },
-      { name: "Email", value: email },
-      { name: "Phone", value: phone }
-    )
-    .setTimestamp();
+        const embed = new EmbedBuilder()
+          .setTitle("New Verification Submission")
+          .addFields(
+            { name: "User", value: `<@${interaction.user.id}>` },
+            { name: "Username", value: `${interaction.user.tag}` },
+            { name: "User ID", value: interaction.user.id },
+            { name: "Full name", value: submittedName },
+            { name: "How they heard about us", value: foundUs },
+            { name: "Referral / who sent them", value: referral },
+            { name: "Email", value: email },
+            { name: "Phone", value: phone }
+          )
+          .setTimestamp();
 
-  await logChannel.send({
-    content: `New verification request from <@${interaction.user.id}>`,
-    embeds: [embed],
-    components: verifyApproveComponents(interaction.user.id),
-    allowedMentions: { parse: [] },
-  });
+        await logChannel.send({
+          content: `New verification request from <@${interaction.user.id}>`,
+          embeds: [embed],
+          components: verifyApproveComponents(interaction.user.id),
+          allowedMentions: { parse: [] },
+        });
 
-  return interaction.reply({
-    content: "✅ Thanks. Your verification has been submitted and will be reviewed shortly.",
-    ephemeral: true,
-  });
-}
+        return interaction.reply({
+          content: "✅ Thanks. Your verification has been submitted and will be reviewed shortly.",
+          ephemeral: true,
+        });
+      }
+
+      if (customId === "staff_stock_modal") {
+        if (!isStaff(interaction.member)) {
+          return interaction.reply({ content: "Staff only.", ephemeral: true });
+        }
+        if (!isStaffChannel(interaction)) {
+          return interaction.reply({ content: "Use this in the staff-only channel.", ephemeral: true });
+        }
+
+        const sku = interaction.fields.getTextInputValue("stock_sku")?.trim().toUpperCase();
+        const qtyRaw = interaction.fields.getTextInputValue("stock_qty")?.trim();
+        const qty = parseInt(qtyRaw, 10);
+
+        if (!sku || !Number.isFinite(qty) || qty < 0) {
+          return interaction.reply({
+            content: "Enter a valid SKU and a stock quantity of 0 or more.",
+            ephemeral: true,
+          });
+        }
+
+        const stockExists = await pool.query(`SELECT 1 FROM stock_items WHERE sku=$1`, [sku]);
+        if (!stockExists.rows.length) {
+          return interaction.reply({
+            content: "That SKU does not exist.",
+            ephemeral: true,
+          });
+        }
+
+        await pool.query(
+          `UPDATE stock_items SET stock_qty=$1, updated_at=NOW() WHERE sku=$2`,
+          [qty, sku]
+        );
+
+        return interaction.reply({
+          content: `✅ Stock updated for ${sku} → ${qty}`,
+          ephemeral: true,
+        });
+      }
+
+      if (customId === "staff_orderlookup_modal") {
+        if (!isStaff(interaction.member)) {
+          return interaction.reply({ content: "Staff only.", ephemeral: true });
+        }
+        if (!isStaffChannel(interaction)) {
+          return interaction.reply({ content: "Use this in the staff-only channel.", ephemeral: true });
+        }
+
+        const orderIdRaw = interaction.fields.getTextInputValue("lookup_order_id")?.trim();
+        const orderId = parseInt(orderIdRaw, 10);
+
+        if (!Number.isFinite(orderId) || orderId <= 0) {
+          return interaction.reply({
+            content: "Enter a valid order ID.",
+            ephemeral: true,
+          });
+        }
+
+        const orderRes = await pool.query(`SELECT * FROM orders WHERE order_id=$1`, [orderId]);
+        if (!orderRes.rows.length) {
+          return interaction.reply({
+            content: "Order not found.",
+            ephemeral: true,
+          });
+        }
+
+        const order = orderRes.rows[0];
+
+        const itemsRes = await pool.query(
+          `SELECT name, qty, price_pence FROM order_items WHERE order_id=$1 ORDER BY id ASC`,
+          [orderId]
+        );
+
+        const itemLines = itemsRes.rows.map(
+          (it) => `• ${it.name} × ${it.qty} — ${money(it.qty * it.price_pence)}`
+        );
+
+        const embed = new EmbedBuilder()
+          .setTitle(`Order #${orderId}`)
+          .addFields(
+            { name: "Status", value: order.status || "unknown", inline: true },
+            { name: "Total", value: money(order.total_pence || 0), inline: true },
+            { name: "User ID", value: order.user_id || "unknown", inline: true },
+            { name: "Receipt Channel", value: order.receipt_channel_id ? `<#${order.receipt_channel_id}>` : "None" },
+            { name: "Items", value: itemLines.join("\n") || "_No items_" }
+          )
+          .setTimestamp(new Date(order.created_at));
+
+        return interaction.reply({
+          embeds: [embed],
+          ephemeral: true,
+        });
+      }
 
       if (customId.startsWith("qty_other_modal:")) {
         const [, category, sku] = customId.split(":");
@@ -1336,6 +1723,14 @@ if (customId === "verify_submit_modal") {
 
         const item = (CATALOG[category] || []).find((x) => x.sku === sku);
         if (!item) return interaction.reply({ content: "Item not found.", ephemeral: true });
+
+        const stockQty = await getStockForSku(item.sku);
+        if (qty > stockQty) {
+          return interaction.reply({
+            content: `Only ${stockQty} in stock for ${item.name}.`,
+            ephemeral: true,
+          });
+        }
 
         await addCartItem(interaction.user.id, {
           sku: item.sku,
@@ -1397,33 +1792,6 @@ if (customId === "verify_submit_modal") {
           ephemeral: true,
         });
       }
-
-      // Old flow kept (not used in UI anymore)
-      if (customId.startsWith("paylink_modal:")) {
-        const [, orderIdStr] = customId.split(":");
-        const orderId = parseInt(orderIdStr, 10);
-
-        if (!isStaff(interaction.member)) {
-          return interaction.reply({ content: "Staff only.", ephemeral: true });
-        }
-
-        const url = interaction.fields.getTextInputValue("payment_url")?.trim();
-        if (!url || !/^https?:\/\/\S+/i.test(url)) {
-          return interaction.reply({ content: "Please enter a valid URL starting with http:// or https://", ephemeral: true });
-        }
-
-        await pool.query(`UPDATE orders SET payment_url=$1, status='awaiting_payment' WHERE order_id=$2`, [url, orderId]);
-
-        const payRow = new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setLabel("Pay now").setStyle(ButtonStyle.Link).setURL(url)
-        );
-
-        await interaction.reply({ content: `✅ Payment link set for Order #${orderId}.`, ephemeral: true });
-        await interaction.channel.send({
-          content: `💳 **Payment link ready** for Order #${orderId}:\nClick below to pay.`,
-          components: [payRow],
-        });
-      }
     }
   } catch (err) {
     console.error(err);
@@ -1439,9 +1807,7 @@ if (customId === "verify_submit_modal") {
       } else {
         await interaction.reply({ content: msg, ephemeral: true });
       }
-    } catch {
-      // ignore
-    }
+    } catch {}
   }
 });
 
