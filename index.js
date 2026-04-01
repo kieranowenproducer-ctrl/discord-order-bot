@@ -513,7 +513,7 @@ async function hasUserPendingOrder(userId) {
     SELECT 1
     FROM orders
     WHERE user_id = $1
-      AND status IN ('pending', 'paid')
+      AND status IN ('pending')
     LIMIT 1
     `,
     [userId]
