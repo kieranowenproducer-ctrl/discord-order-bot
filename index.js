@@ -1025,12 +1025,19 @@ function staffReceiptControls(orderId, status = "pending") {
         .setCustomId(`staff_mark_paid:${orderId}`)
         .setLabel("Mark as paid ✅")
         .setStyle(ButtonStyle.Success)
-        .setDisabled(status === "paid" || status === "dispatched"),
+        .setDisabled(status === "paid" || status === "dispatched" || status === "cancelled"),
+
       new ButtonBuilder()
         .setCustomId(`staff_mark_dispatched:${orderId}`)
         .setLabel("Mark as dispatched 📦")
         .setStyle(ButtonStyle.Primary)
-        .setDisabled(status === "dispatched")
+        .setDisabled(status === "dispatched" || status === "cancelled"),
+
+      new ButtonBuilder()
+        .setCustomId(`staff_cancel_order:${orderId}`)
+        .setLabel("Cancel Order ❌")
+        .setStyle(ButtonStyle.Danger)
+        .setDisabled(status === "dispatched" || status === "cancelled")
     ),
   ];
 }
@@ -1493,6 +1500,85 @@ if (customId.startsWith("staff_mark_paid:")) {
       }
     }
 
+    if (customId.startsWith("staff_cancel_order:")) {
+  const [, orderIdStr] = customId.split(":");
+  const orderId = parseInt(orderIdStr, 10);
+
+  if (!isStaff(interaction.member)) {
+    return interaction.reply({ content: "Staff only.", ephemeral: true });
+  }
+
+  const orderRes = await pool.query(
+    `SELECT status, user_id FROM orders WHERE order_id=$1`,
+    [orderId]
+  );
+
+  if (!orderRes.rows.length) {
+    return interaction.reply({
+      content: "Order not found.",
+      ephemeral: true,
+    });
+  }
+
+  const currentStatus = orderRes.rows[0].status;
+  const customerUserId = orderRes.rows[0].user_id;
+
+  if (currentStatus === "cancelled") {
+    return interaction.reply({
+      content: "This order is already cancelled.",
+      ephemeral: true,
+    });
+  }
+
+  if (currentStatus === "dispatched") {
+    return interaction.reply({
+      content: "Dispatched orders cannot be cancelled.",
+      ephemeral: true,
+    });
+  }
+
+  const itemsRes = await pool.query(
+    `SELECT sku, qty FROM order_items WHERE order_id=$1`,
+    [orderId]
+  );
+
+  for (const item of itemsRes.rows) {
+    await pool.query(
+      `
+      UPDATE stock_items
+      SET stock_qty = stock_qty + $1,
+          updated_at = NOW()
+      WHERE sku = $2
+      `,
+      [item.qty, item.sku]
+    );
+  }
+
+  await pool.query(
+    `UPDATE orders SET status='cancelled' WHERE order_id=$1`,
+    [orderId]
+  );
+
+  await interaction.update({
+    content: `❌ Order #${orderId} has been cancelled.`,
+    embeds: interaction.message.embeds,
+    components: staffReceiptControls(orderId, "cancelled"),
+  });
+
+  await interaction.channel.send(
+    `❌ Order #${orderId} has been cancelled. Stock has been restored.`
+  );
+
+  try {
+    await interaction.channel.permissionOverwrites.edit(customerUserId, {
+      SendMessages: false,
+    });
+  } catch {
+    // ignore lock errors for now
+  }
+
+  return;
+}
     if (interaction.isStringSelectMenu()) {
       const { customId } = interaction;
 
