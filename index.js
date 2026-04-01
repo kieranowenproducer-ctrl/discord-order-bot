@@ -1,5 +1,5 @@
 // index.js
-// Discord Mock Shop Bot (discord.js v14 + Postgres)
+// Discord Shop Bot (discord.js v14 + Postgres)
 // - Generic draft shop
 // - Verification system
 // - Stock control
