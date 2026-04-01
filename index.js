@@ -993,9 +993,9 @@ client.on("interactionCreate", async (interaction) => {
 
         await clearCart(interaction.user.id);
 
-        return interaction.reply({
+        return interaction.update({
           content: `✅ Order submitted! Your private receipt channel is: <#${receiptChannel.id}>`,
-          ephemeral: true,
+          components: [],
         });
       }
 
