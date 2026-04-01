@@ -1027,26 +1027,31 @@ client.on("interactionCreate", async (interaction) => {
 
     /* ------------------------------ SELECT MENUS ------------------------------ */
 
-    if (interaction.isStringSelectMenu()) {
-      const { customId } = interaction;
+if (interaction.isStringSelectMenu()) {
+  const { customId } = interaction;
       
-      if (customId === "select_category") {
-  const category = interaction.values[0];
-  return interaction.update({
-    content: "Now choose an item:",
-    components: itemSelectComponents(category),
-  });
+  if (customId === "select_category") {
+    const category = interaction.values[0];
+    return interaction.update({
+      content: "Now choose an item:",
+      components: itemSelectComponents(category),
+    });
+  }
+
+  if (customId.startsWith("select_item:")) {
+    const [, category] = customId.split(":");
+    const sku = interaction.values[0];
+
+    return interaction.update({
+      content: "Selected item — how many?",
+      components: qtyButtonsComponents(category, sku),
+    });
+  }
 }
 
-    if (customId.startsWith("select_item:")) {
-  const [, category] = customId.split(":");
-  const sku = interaction.values[0];
+ /* ------------------------------ MODAL SUBMITS ------------------------------ */
 
-  return interaction.update({
-    content: "Selected item — how many?",
-    components: qtyButtonsComponents(category, sku),
-  });
-}
+if (interaction.isModalSubmit()) {
 
     /* ------------------------------ MODAL SUBMITS ------------------------------ */
 
