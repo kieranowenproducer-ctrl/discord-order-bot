@@ -630,18 +630,20 @@ function cartActionsComponents() {
 function verifyPanelComponents() {
   const embed = new EmbedBuilder()
     .setTitle("Server Verification")
-    .setDescription(
-      [
-        "To access the full server, click the button below and complete the form.",
-        "",
-        "You will be asked for:",
-        "• Your name",
-        "• How you found us",
-        "• Referral (if any)",
-        "",
-        "Once submitted, staff will review it shortly."
-      ].join("\n")
-    );
+  .setDescription(
+  [
+    "To access the full server, click the button below and complete the form.",
+    "",
+    "All fields are required:",
+    "• Full name",
+    "• How you heard about us",
+    "• Referral / who sent you",
+    "• Email address",
+    "• Phone number",
+    "",
+    "Failure to complete the form correctly may affect whether you are verified."
+  ].join("\n")
+);
 
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
@@ -737,30 +739,51 @@ function discountCodeModal() {
 }
 
 function verifyModal() {
-  const modal = new ModalBuilder().setCustomId("verify_submit_modal").setTitle("Verification Form");
+  const modal = new ModalBuilder()
+    .setCustomId("verify_submit_modal")
+    .setTitle("Verification Form");
 
   const nameInput = new TextInputBuilder()
     .setCustomId("verify_name")
-    .setLabel("Your name")
+    .setLabel("Full name")
     .setStyle(TextInputStyle.Short)
-    .setRequired(true);
+    .setRequired(true)
+    .setPlaceholder("Enter your full name");
 
   const foundInput = new TextInputBuilder()
     .setCustomId("verify_found")
-    .setLabel("How did you find us?")
+    .setLabel("How did you hear about us?")
     .setStyle(TextInputStyle.Paragraph)
-    .setRequired(true);
+    .setRequired(true)
+    .setPlaceholder("Be specific");
 
   const referralInput = new TextInputBuilder()
     .setCustomId("verify_referral")
-    .setLabel("Referral (if any)")
+    .setLabel("Referral / who sent you")
     .setStyle(TextInputStyle.Short)
-    .setRequired(false);
+    .setRequired(true)
+    .setPlaceholder("Enter a name or type none");
+
+  const emailInput = new TextInputBuilder()
+    .setCustomId("verify_email")
+    .setLabel("Email address")
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+    .setPlaceholder("name@example.com");
+
+  const phoneInput = new TextInputBuilder()
+    .setCustomId("verify_phone")
+    .setLabel("Phone number")
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+    .setPlaceholder("Enter your phone number");
 
   modal.addComponents(
     new ActionRowBuilder().addComponents(nameInput),
     new ActionRowBuilder().addComponents(foundInput),
-    new ActionRowBuilder().addComponents(referralInput)
+    new ActionRowBuilder().addComponents(referralInput),
+    new ActionRowBuilder().addComponents(emailInput),
+    new ActionRowBuilder().addComponents(phoneInput)
   );
 
   return modal;
@@ -1229,59 +1252,78 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
-      if (customId === "verify_submit_modal") {
-        const submittedName = interaction.fields.getTextInputValue("verify_name")?.trim();
-        const foundUs = interaction.fields.getTextInputValue("verify_found")?.trim();
-        const referralRaw = interaction.fields.getTextInputValue("verify_referral");
-        const referral = referralRaw?.trim() || "None";
+if (customId === "verify_submit_modal") {
+  const submittedName = interaction.fields.getTextInputValue("verify_name")?.trim();
+  const foundUs = interaction.fields.getTextInputValue("verify_found")?.trim();
+  const referral = interaction.fields.getTextInputValue("verify_referral")?.trim();
+  const email = interaction.fields.getTextInputValue("verify_email")?.trim();
+  const phone = interaction.fields.getTextInputValue("verify_phone")?.trim();
 
-        if (!submittedName || !foundUs) {
-          return interaction.reply({
-            content: "Please complete the required verification fields.",
-            ephemeral: true,
-          });
-        }
+  if (!submittedName || !foundUs || !referral || !email || !phone) {
+    return interaction.reply({
+      content: "All verification fields are required.",
+      ephemeral: true,
+    });
+  }
 
-        const logChannel = await interaction.guild.channels.fetch(VERIFICATION_LOG_CHANNEL_ID).catch(() => null);
-        if (!logChannel) {
-          return interaction.reply({
-            content: "Could not find the verification log channel. Check VERIFICATION_LOG_CHANNEL_ID.",
-            ephemeral: true,
-          });
-        }
+  const emailLooksValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+  if (!emailLooksValid) {
+    return interaction.reply({
+      content: "Please enter a valid email address.",
+      ephemeral: true,
+    });
+  }
 
-        const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
-        if (member?.roles?.cache?.has(VERIFIED_ROLE_ID)) {
-          return interaction.reply({
-            content: "You are already verified.",
-            ephemeral: true,
-          });
-        }
+  const phoneClean = phone.replace(/[^\d+]/g, "");
+  if (phoneClean.length < 7) {
+    return interaction.reply({
+      content: "Please enter a valid phone number.",
+      ephemeral: true,
+    });
+  }
 
-        const embed = new EmbedBuilder()
-          .setTitle("New Verification Submission")
-          .addFields(
-            { name: "User", value: `<@${interaction.user.id}>` },
-            { name: "Username", value: `${interaction.user.tag}` },
-            { name: "User ID", value: interaction.user.id },
-            { name: "Name", value: submittedName },
-            { name: "How they found us", value: foundUs },
-            { name: "Referral", value: referral }
-          )
-          .setTimestamp();
+  const logChannel = await interaction.guild.channels.fetch(VERIFICATION_LOG_CHANNEL_ID).catch(() => null);
+  if (!logChannel) {
+    return interaction.reply({
+      content: "Could not find the verification log channel. Check VERIFICATION_LOG_CHANNEL_ID.",
+      ephemeral: true,
+    });
+  }
 
-        await logChannel.send({
-          content: `New verification request from <@${interaction.user.id}>`,
-          embeds: [embed],
-          components: verifyApproveComponents(interaction.user.id),
-          allowedMentions: { parse: [] },
-        });
+  const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
+  if (member?.roles?.cache?.has(VERIFIED_ROLE_ID)) {
+    return interaction.reply({
+      content: "You are already verified.",
+      ephemeral: true,
+    });
+  }
 
-        return interaction.reply({
-          content: "✅ Thanks. Your verification has been submitted and will be reviewed shortly.",
-          ephemeral: true,
-        });
-      }
+  const embed = new EmbedBuilder()
+    .setTitle("New Verification Submission")
+    .addFields(
+      { name: "User", value: `<@${interaction.user.id}>` },
+      { name: "Username", value: `${interaction.user.tag}` },
+      { name: "User ID", value: interaction.user.id },
+      { name: "Full name", value: submittedName },
+      { name: "How they heard about us", value: foundUs },
+      { name: "Referral / who sent them", value: referral },
+      { name: "Email", value: email },
+      { name: "Phone", value: phone }
+    )
+    .setTimestamp();
+
+  await logChannel.send({
+    content: `New verification request from <@${interaction.user.id}>`,
+    embeds: [embed],
+    components: verifyApproveComponents(interaction.user.id),
+    allowedMentions: { parse: [] },
+  });
+
+  return interaction.reply({
+    content: "✅ Thanks. Your verification has been submitted and will be reviewed shortly.",
+    ephemeral: true,
+  });
+}
 
       if (customId.startsWith("qty_other_modal:")) {
         const [, category, sku] = customId.split(":");
