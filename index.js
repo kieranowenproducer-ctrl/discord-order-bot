@@ -508,17 +508,7 @@ async function hasUserPlacedOrderBefore(userId) {
 }
 
 async function hasUserPendingOrder(userId) {
-  const res = await pool.query(
-    `
-    SELECT 1
-    FROM orders
-    WHERE user_id = $1
-      AND status IN ('pending')
-    LIMIT 1
-    `,
-    [userId]
-  );
-  return res.rows.length > 0;
+  return false;
 }
 
 async function getUserShippingProfile(userId) {
