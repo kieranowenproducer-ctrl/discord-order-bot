@@ -1025,7 +1025,7 @@ function receiptEmbed(orderId, items, subtotal, discountAmount, discountCode, sh
     .setTitle(`${STORE_NAME} — Receipt (Order #${orderId})`)
     .setDescription(lines.join("\n") || "_No items_")
     .addFields(fields)
-    .setFooter({ text: "Demo shop flow." });
+    .setFooter({ text: "Thank you for your order." });
 }
 
 function staffReceiptControls(orderId, status = "pending") {
