@@ -1442,22 +1442,35 @@ client.on("interactionCreate", async (interaction) => {
         }
       }
 
-      if (customId.startsWith("staff_mark_paid:")) {
-        const [, orderIdStr] = customId.split(":");
-        const orderId = parseInt(orderIdStr, 10);
+if (customId.startsWith("staff_mark_paid:")) {
+  const [, orderIdStr] = customId.split(":");
+  const orderId = parseInt(orderIdStr, 10);
 
-        if (!isStaff(interaction.member)) {
-          return interaction.reply({ content: "Staff only.", ephemeral: true });
-        }
+  console.log("PAID BUTTON CLICKED", {
+    orderId,
+    userId: interaction.user.id,
+    username: interaction.user.tag,
+  });
 
-        await pool.query(`UPDATE orders SET status='paid' WHERE order_id=$1`, [orderId]);
+  if (!isStaff(interaction.member)) {
+    console.log("PAID BLOCKED: not staff");
+    return interaction.reply({ content: "Staff only.", ephemeral: true });
+  }
 
-        return interaction.update({
-          content: `✅ Order #${orderId} marked as paid.`,
-          embeds: interaction.message.embeds,
-          components: staffReceiptControls(orderId, "paid"),
-        });
-      }
+  await pool.query(`UPDATE orders SET status='paid' WHERE order_id=$1`, [orderId]);
+  console.log("PAID DB UPDATED", { orderId });
+
+  await interaction.update({
+    content: `✅ Order #${orderId} marked as paid.`,
+    embeds: interaction.message.embeds,
+    components: staffReceiptControls(orderId, "paid"),
+  });
+
+  await interaction.channel.send(`✅ Order #${orderId} has been marked as paid.`);
+  console.log("PAID CHANNEL MESSAGE SENT", { orderId });
+
+  return;
+}
 
       if (customId.startsWith("staff_mark_dispatched:")) {
         const [, orderIdStr] = customId.split(":");
