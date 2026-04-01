@@ -1074,35 +1074,34 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
-      if (customId.startsWith("qty_other_modal:")) {
-        const [, category, sku] = customId.split(":");
-        const qtyRaw = interaction.fields.getTextInputValue("qty");
-        const qty = parseInt(qtyRaw, 10);
+if (customId.startsWith("qty_other_modal:")) {
+  const [, category, sku] = customId.split(":");
+  const qtyRaw = interaction.fields.getTextInputValue("qty");
+  const qty = parseInt(qtyRaw, 10);
 
-        if (!Number.isFinite(qty) || qty <= 0) {
-          return interaction.reply({ content: "Please enter a valid quantity (number > 0).", ephemeral: true });
-        }
+  if (!Number.isFinite(qty) || qty <= 0) {
+    return interaction.reply({ content: "Please enter a valid quantity (number > 0).", ephemeral: true });
+  }
 
-        const item = (CATALOG[category] || []).find((x) => x.sku === sku);
-        if (!item) return interaction.reply({ content: "Item not found.", ephemeral: true });
+  const item = (CATALOG[category] || []).find((x) => x.sku === sku);
+  if (!item) return interaction.reply({ content: "Item not found.", ephemeral: true });
 
-        await addCartItem(interaction.user.id, {
-          sku: item.sku,
-          name: item.name,
-          size: DEFAULT_SIZE,
-          color: DEFAULT_COLOR,
-          qty,
-          price_pence: item.price_pence,
-        });
+  await addCartItem(interaction.user.id, {
+    sku: item.sku,
+    name: item.name,
+    size: DEFAULT_SIZE,
+    color: DEFAULT_COLOR,
+    qty,
+    price_pence: item.price_pence,
+  });
 
-        const content = await buildCartMessage(interaction.user.id);
+  const content = await buildCartMessage(interaction.user.id);
 
-        return interaction.reply({
-          content,
-          components: cartActionsComponents(),
-          ephemeral: true,
-        });
-      }
+  return interaction.update({
+    content,
+    components: cartActionsComponents(),
+  });
+}
 
       if (customId === "discount_code_modal") {
         const enteredRaw = interaction.fields.getTextInputValue("discount_code")?.trim();
