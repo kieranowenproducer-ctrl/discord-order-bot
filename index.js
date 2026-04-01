@@ -52,7 +52,7 @@ const BANK_BANK_NAME = process.env.BANK_BANK_NAME || "YOUR BANK";
 const BANK_IBAN = process.env.BANK_IBAN || "";
 const BANK_SWIFT = process.env.BANK_SWIFT || "";
 
-const STORE_NAME = "Bodymarket Labs Demo Store";
+const STORE_NAME = "Bodymarket Labs Store";
 
 const DEFAULT_SIZE = "Standard";
 const DEFAULT_COLOR = "Standard";
