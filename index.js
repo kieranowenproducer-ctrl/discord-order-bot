@@ -841,38 +841,40 @@ client.on("interactionCreate", async (interaction) => {
       }
 
       if (customId.startsWith("add_qty:")) {
-        const [, category, sku, qtyStr] = customId.split(":");
-        const qty = parseInt(qtyStr, 10);
+  const [, category, sku, qtyStr] = customId.split(":");
+  const qty = parseInt(qtyStr, 10);
 
-        const item = (CATALOG[category] || []).find((x) => x.sku === sku);
-        if (!item) return interaction.reply({ content: "Item not found.", ephemeral: true });
+  const item = (CATALOG[category] || []).find((x) => x.sku === sku);
+  if (!item) return interaction.reply({ content: "Item not found.", ephemeral: true });
 
-        await addCartItem(interaction.user.id, {
-          sku: item.sku,
-          name: item.name,
-          size: DEFAULT_SIZE,
-          color: DEFAULT_COLOR,
-          qty,
-          price_pence: item.price_pence,
-        });
+  await addCartItem(interaction.user.id, {
+    sku: item.sku,
+    name: item.name,
+    size: DEFAULT_SIZE,
+    color: DEFAULT_COLOR,
+    qty,
+    price_pence: item.price_pence,
+  });
 
-        const content = await buildCartMessage(interaction.user.id);
+  const content = await buildCartMessage(interaction.user.id);
 
-        return interaction.reply({
-          content,
-          components: cartActionsComponents(),
-          ephemeral: true,
-        });
-      }
+  return interaction.update({
+    content,
+    components: cartActionsComponents(),
+  });
+}
 
       if (customId.startsWith("add_qty_other:")) {
         const [, category, sku] = customId.split(":");
         return interaction.showModal(qtyOtherModal(category, sku));
       }
-
+      
       if (customId === "cart_add_more") {
-        return interaction.reply({ content: "Choose a category:", components: categorySelectComponents(), ephemeral: true });
-      }
+  return interaction.update({
+    content: "Choose a category:",
+    components: categorySelectComponents(),
+  });
+}
 
       if (customId === "cart_discount") {
         const cart = await getCartSummary(interaction.user.id);
@@ -1027,27 +1029,24 @@ client.on("interactionCreate", async (interaction) => {
 
     if (interaction.isStringSelectMenu()) {
       const { customId } = interaction;
-
+      
       if (customId === "select_category") {
-        const category = interaction.values[0];
-        return interaction.reply({
-          content: "Now choose an item:",
-          components: itemSelectComponents(category),
-          ephemeral: true,
-        });
-      }
+  const category = interaction.values[0];
+  return interaction.update({
+    content: "Now choose an item:",
+    components: itemSelectComponents(category),
+  });
+}
 
-      if (customId.startsWith("select_item:")) {
-        const [, category] = customId.split(":");
-        const sku = interaction.values[0];
+    if (customId.startsWith("select_item:")) {
+  const [, category] = customId.split(":");
+  const sku = interaction.values[0];
 
-        return interaction.reply({
-          content: "Selected item — how many?",
-          components: qtyButtonsComponents(category, sku),
-          ephemeral: true,
-        });
-      }
-    }
+  return interaction.update({
+    content: "Selected item — how many?",
+    components: qtyButtonsComponents(category, sku),
+  });
+}
 
     /* ------------------------------ MODAL SUBMITS ------------------------------ */
 
