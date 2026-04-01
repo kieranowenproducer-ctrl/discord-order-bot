@@ -1078,7 +1078,7 @@ client.on("interactionCreate", async (interaction) => {
           `6) Submit your order when you're done\n\n` +
           `**Shipping:** UK Tracked £10 • Europe £35 • USA £45\n` +
           `**Cut-off:** 15:30 (Mon–Fri Dispatch)\n\n` +
-          `This is a **generic mock shop draft** with stock control, duplicate order protection, dispatch controls, and a staff admin panel.`;
+          `Browse our available products below. Stock updates live and staff support is available if needed.`;
 
         await menuChannel.send({ content, components: menuMessageComponents() });
 
