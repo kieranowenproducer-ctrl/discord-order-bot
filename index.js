@@ -1806,9 +1806,9 @@ client.on("interactionCreate", async (interaction) => {
           [qty, sku]
         );
 
-        return interaction.reply({
-          content: `✅ Stock updated for **${item.name}** (${sku}) → ${qty}`,
-          ephemeral: true,
+        return interaction.update({
+           content: `✅ Stock updated for **${item.name}** (${sku}) → ${qty}`,
+           components: [],
         });
       }
 
