@@ -1,6 +1,6 @@
 // index.js
 // Discord Shop Bot (discord.js v14 + Postgres)
-// - Generic draft shop
+// - draft shop
 // - Verification system
 // - Stock control
 // - Duplicate order protection
