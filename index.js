@@ -6,6 +6,7 @@
 // - Bank transfer details shown in receipt channel
 // - Discount code support added
 // - Welcome discount: WELCOME10 = 10% off products only, first order only
+// - Added verification system with /setupverify, modal submit, staff approve button, and auto-role assignment
 
 const {
   Client,
@@ -41,6 +42,10 @@ const ORDERS_CATEGORY_ID = process.env.ORDERS_CATEGORY_ID;
 const ORDERS_CHANNEL_ID = process.env.ORDERS_CHANNEL_ID; // optional (not required)
 const STAFF_ROLE_ID = process.env.STAFF_ROLE_ID;
 
+const VERIFY_CHANNEL_ID = process.env.VERIFY_CHANNEL_ID;
+const VERIFICATION_LOG_CHANNEL_ID = process.env.VERIFICATION_LOG_CHANNEL_ID;
+const VERIFIED_ROLE_ID = process.env.VERIFIED_ROLE_ID;
+
 // Bank details via env vars so you don't hardcode in GitHub
 const BANK_ACCOUNT_NAME = process.env.BANK_ACCOUNT_NAME || "YOUR COMPANY LTD";
 const BANK_SORT_CODE = process.env.BANK_SORT_CODE || "00-00-00";
@@ -69,6 +74,9 @@ requireEnv("GUILD_ID", GUILD_ID);
 requireEnv("MENU_CHANNEL_ID", MENU_CHANNEL_ID);
 requireEnv("ORDERS_CATEGORY_ID", ORDERS_CATEGORY_ID);
 requireEnv("STAFF_ROLE_ID", STAFF_ROLE_ID);
+requireEnv("VERIFY_CHANNEL_ID", VERIFY_CHANNEL_ID);
+requireEnv("VERIFICATION_LOG_CHANNEL_ID", VERIFICATION_LOG_CHANNEL_ID);
+requireEnv("VERIFIED_ROLE_ID", VERIFIED_ROLE_ID);
 
 /* ----------------------------- DATABASE SETUP ---------------------------- */
 
@@ -513,7 +521,7 @@ const categoryOptions = Object.keys(CATALOG).map((cat) => ({ label: cat, value: 
 /* ---------------------------- DISCORD CLIENT ---------------------------- */
 
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds],
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
   partials: [Partials.Channel],
 });
 
@@ -537,7 +545,15 @@ const commands = [
     .setName("setupshop")
     .setDescription("Post/refresh the shop menu message in the menu channel")
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-  new SlashCommandBuilder().setName("ping").setDescription("Health check"),
+
+  new SlashCommandBuilder()
+    .setName("setupverify")
+    .setDescription("Post/refresh the verification panel in the verify channel")
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+
+  new SlashCommandBuilder()
+    .setName("ping")
+    .setDescription("Health check"),
 ].map((c) => c.toJSON());
 
 async function registerCommands() {
@@ -611,6 +627,43 @@ function cartActionsComponents() {
   ];
 }
 
+function verifyPanelComponents() {
+  const embed = new EmbedBuilder()
+    .setTitle("Server Verification")
+    .setDescription(
+      [
+        "To access the full server, click the button below and complete the form.",
+        "",
+        "You will be asked for:",
+        "• Your name",
+        "• How you found us",
+        "• Referral (if any)",
+        "",
+        "Once submitted, staff will review it shortly."
+      ].join("\n")
+    );
+
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId("verify_open_modal")
+      .setLabel("Verify")
+      .setStyle(ButtonStyle.Success)
+  );
+
+  return { embed, row };
+}
+
+function verifyApproveComponents(userId) {
+  return [
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`verify_approve:${userId}`)
+        .setLabel("Approve ✅")
+        .setStyle(ButtonStyle.Success)
+    ),
+  ];
+}
+
 /* -------------------------- MODALS (MAX 5 INPUTS) ------------------------- */
 
 function shippingModal() {
@@ -680,6 +733,36 @@ function discountCodeModal() {
     .setRequired(true);
 
   modal.addComponents(new ActionRowBuilder().addComponents(code));
+  return modal;
+}
+
+function verifyModal() {
+  const modal = new ModalBuilder().setCustomId("verify_submit_modal").setTitle("Verification Form");
+
+  const nameInput = new TextInputBuilder()
+    .setCustomId("verify_name")
+    .setLabel("Your name")
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true);
+
+  const foundInput = new TextInputBuilder()
+    .setCustomId("verify_found")
+    .setLabel("How did you find us?")
+    .setStyle(TextInputStyle.Paragraph)
+    .setRequired(true);
+
+  const referralInput = new TextInputBuilder()
+    .setCustomId("verify_referral")
+    .setLabel("Referral (if any)")
+    .setStyle(TextInputStyle.Short)
+    .setRequired(false);
+
+  modal.addComponents(
+    new ActionRowBuilder().addComponents(nameInput),
+    new ActionRowBuilder().addComponents(foundInput),
+    new ActionRowBuilder().addComponents(referralInput)
+  );
+
   return modal;
 }
 
@@ -829,6 +912,25 @@ client.on("interactionCreate", async (interaction) => {
 
         return interaction.editReply("✅ Shop menu message posted/refreshed in the menu channel.");
       }
+
+      if (interaction.commandName === "setupverify") {
+        await interaction.deferReply({ ephemeral: true });
+        deferred = true;
+
+        const verifyChannel = await client.channels.fetch(VERIFY_CHANNEL_ID).catch(() => null);
+        if (!verifyChannel) {
+          return interaction.editReply("❌ Could not find the verify channel. Check VERIFY_CHANNEL_ID.");
+        }
+
+        const { embed, row } = verifyPanelComponents();
+
+        await verifyChannel.send({
+          embeds: [embed],
+          components: [row],
+        });
+
+        return interaction.editReply(`✅ Verification panel posted in <#${VERIFY_CHANNEL_ID}>.`);
+      }
     }
 
     /* ------------------------------ BUTTONS ------------------------------ */
@@ -840,41 +942,94 @@ client.on("interactionCreate", async (interaction) => {
         return interaction.showModal(shippingModal());
       }
 
+      if (customId === "verify_open_modal") {
+        return interaction.showModal(verifyModal());
+      }
+
+      if (customId.startsWith("verify_approve:")) {
+        const [, targetUserId] = customId.split(":");
+
+        if (!isStaff(interaction.member)) {
+          return interaction.reply({ content: "Staff only.", ephemeral: true });
+        }
+
+        const guild = interaction.guild;
+        const member = await guild.members.fetch(targetUserId).catch(() => null);
+
+        if (!member) {
+          return interaction.reply({
+            content: "Could not find that user in the server.",
+            ephemeral: true,
+          });
+        }
+
+        const verifiedRole = guild.roles.cache.get(VERIFIED_ROLE_ID) || await guild.roles.fetch(VERIFIED_ROLE_ID).catch(() => null);
+        if (!verifiedRole) {
+          return interaction.reply({
+            content: "Could not find the Verified role. Check VERIFIED_ROLE_ID.",
+            ephemeral: true,
+          });
+        }
+
+        if (member.roles.cache.has(VERIFIED_ROLE_ID)) {
+          return interaction.reply({
+            content: "That user is already verified.",
+            ephemeral: true,
+          });
+        }
+
+        await member.roles.add(VERIFIED_ROLE_ID, `Approved by ${interaction.user.tag}`);
+
+        await interaction.update({
+          content: `✅ Verified <@${targetUserId}> by <@${interaction.user.id}>`,
+          embeds: interaction.message.embeds,
+          components: [],
+        });
+
+        try {
+          await member.send(`✅ You have been verified in **${guild.name}** and should now have access to the full server.`);
+        } catch {
+          // ignore DM failures
+        }
+
+        return;
+      }
+
       if (customId.startsWith("add_qty:")) {
-  const [, category, sku, qtyStr] = customId.split(":");
-  const qty = parseInt(qtyStr, 10);
+        const [, category, sku, qtyStr] = customId.split(":");
+        const qty = parseInt(qtyStr, 10);
 
-  const item = (CATALOG[category] || []).find((x) => x.sku === sku);
-  if (!item) return interaction.reply({ content: "Item not found.", ephemeral: true });
+        const item = (CATALOG[category] || []).find((x) => x.sku === sku);
+        if (!item) return interaction.reply({ content: "Item not found.", ephemeral: true });
 
-  await addCartItem(interaction.user.id, {
-    sku: item.sku,
-    name: item.name,
-    size: DEFAULT_SIZE,
-    color: DEFAULT_COLOR,
-    qty,
-    price_pence: item.price_pence,
-  });
+        await addCartItem(interaction.user.id, {
+          sku: item.sku,
+          name: item.name,
+          size: DEFAULT_SIZE,
+          color: DEFAULT_COLOR,
+          qty,
+          price_pence: item.price_pence,
+        });
 
-  const content = await buildCartMessage(interaction.user.id);
+        const content = await buildCartMessage(interaction.user.id);
 
-  return interaction.update({
-    content,
-    components: cartActionsComponents(),
-  });
-}
+        return interaction.update({
+          content,
+          components: cartActionsComponents(),
+        });
+      }
 
       if (customId.startsWith("add_qty_other:")) {
         const [, category, sku] = customId.split(":");
         return interaction.showModal(qtyOtherModal(category, sku));
       }
-      
+
       if (customId === "cart_add_more") {
-  return interaction.update({
-    content: "Choose a category:",
-    components: categorySelectComponents(),
-  });
-}
+        return interaction.update({
+          content: "Choose a category:",
+          components: categorySelectComponents(),
+        });
+      }
 
       if (customId === "cart_discount") {
         const cart = await getCartSummary(interaction.user.id);
@@ -886,16 +1041,16 @@ client.on("interactionCreate", async (interaction) => {
       }
 
       if (customId === "cart_clear") {
-  await clearCart(interaction.user.id);
+        await clearCart(interaction.user.id);
 
-  return interaction.update({
-    content:
-      "🗑️ **Basket empty**\n\n" +
-      "Your cart has been cleared.\n" +
-      "Choose a category below to start a new order:",
-    components: categorySelectComponents(),
-  });
-}
+        return interaction.update({
+          content:
+            "🗑️ **Basket empty**\n\n" +
+            "Your cart has been cleared.\n" +
+            "Choose a category below to start a new order:",
+          components: categorySelectComponents(),
+        });
+      }
 
       if (customId === "cart_submit") {
         const cart = await getCartSummary(interaction.user.id);
@@ -1074,34 +1229,88 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
-if (customId.startsWith("qty_other_modal:")) {
-  const [, category, sku] = customId.split(":");
-  const qtyRaw = interaction.fields.getTextInputValue("qty");
-  const qty = parseInt(qtyRaw, 10);
+      if (customId === "verify_submit_modal") {
+        const submittedName = interaction.fields.getTextInputValue("verify_name")?.trim();
+        const foundUs = interaction.fields.getTextInputValue("verify_found")?.trim();
+        const referralRaw = interaction.fields.getTextInputValue("verify_referral");
+        const referral = referralRaw?.trim() || "None";
 
-  if (!Number.isFinite(qty) || qty <= 0) {
-    return interaction.reply({ content: "Please enter a valid quantity (number > 0).", ephemeral: true });
-  }
+        if (!submittedName || !foundUs) {
+          return interaction.reply({
+            content: "Please complete the required verification fields.",
+            ephemeral: true,
+          });
+        }
 
-  const item = (CATALOG[category] || []).find((x) => x.sku === sku);
-  if (!item) return interaction.reply({ content: "Item not found.", ephemeral: true });
+        const logChannel = await interaction.guild.channels.fetch(VERIFICATION_LOG_CHANNEL_ID).catch(() => null);
+        if (!logChannel) {
+          return interaction.reply({
+            content: "Could not find the verification log channel. Check VERIFICATION_LOG_CHANNEL_ID.",
+            ephemeral: true,
+          });
+        }
 
-  await addCartItem(interaction.user.id, {
-    sku: item.sku,
-    name: item.name,
-    size: DEFAULT_SIZE,
-    color: DEFAULT_COLOR,
-    qty,
-    price_pence: item.price_pence,
-  });
+        const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
+        if (member?.roles?.cache?.has(VERIFIED_ROLE_ID)) {
+          return interaction.reply({
+            content: "You are already verified.",
+            ephemeral: true,
+          });
+        }
 
-  const content = await buildCartMessage(interaction.user.id);
+        const embed = new EmbedBuilder()
+          .setTitle("New Verification Submission")
+          .addFields(
+            { name: "User", value: `<@${interaction.user.id}>` },
+            { name: "Username", value: `${interaction.user.tag}` },
+            { name: "User ID", value: interaction.user.id },
+            { name: "Name", value: submittedName },
+            { name: "How they found us", value: foundUs },
+            { name: "Referral", value: referral }
+          )
+          .setTimestamp();
 
-  return interaction.update({
-    content,
-    components: cartActionsComponents(),
-  });
-}
+        await logChannel.send({
+          content: `New verification request from <@${interaction.user.id}>`,
+          embeds: [embed],
+          components: verifyApproveComponents(interaction.user.id),
+          allowedMentions: { parse: [] },
+        });
+
+        return interaction.reply({
+          content: "✅ Thanks. Your verification has been submitted and will be reviewed shortly.",
+          ephemeral: true,
+        });
+      }
+
+      if (customId.startsWith("qty_other_modal:")) {
+        const [, category, sku] = customId.split(":");
+        const qtyRaw = interaction.fields.getTextInputValue("qty");
+        const qty = parseInt(qtyRaw, 10);
+
+        if (!Number.isFinite(qty) || qty <= 0) {
+          return interaction.reply({ content: "Please enter a valid quantity (number > 0).", ephemeral: true });
+        }
+
+        const item = (CATALOG[category] || []).find((x) => x.sku === sku);
+        if (!item) return interaction.reply({ content: "Item not found.", ephemeral: true });
+
+        await addCartItem(interaction.user.id, {
+          sku: item.sku,
+          name: item.name,
+          size: DEFAULT_SIZE,
+          color: DEFAULT_COLOR,
+          qty,
+          price_pence: item.price_pence,
+        });
+
+        const content = await buildCartMessage(interaction.user.id);
+
+        return interaction.update({
+          content,
+          components: cartActionsComponents(),
+        });
+      }
 
       if (customId === "discount_code_modal") {
         const enteredRaw = interaction.fields.getTextInputValue("discount_code")?.trim();
