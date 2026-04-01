@@ -1179,7 +1179,8 @@ if (interaction.isModalSubmit()) {
         });
       }
     }
-  } catch (err) {
+  }
+  catch (err) {
     console.error(err);
 
     if (!interaction.isRepliable()) return;
