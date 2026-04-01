@@ -1027,31 +1027,27 @@ client.on("interactionCreate", async (interaction) => {
 
     /* ------------------------------ SELECT MENUS ------------------------------ */
 
-if (interaction.isStringSelectMenu()) {
-  const { customId } = interaction;
-      
-  if (customId === "select_category") {
-    const category = interaction.values[0];
-    return interaction.update({
-      content: "Now choose an item:",
-      components: itemSelectComponents(category),
-    });
-  }
+    if (interaction.isStringSelectMenu()) {
+      const { customId } = interaction;
 
-  if (customId.startsWith("select_item:")) {
-    const [, category] = customId.split(":");
-    const sku = interaction.values[0];
+      if (customId === "select_category") {
+        const category = interaction.values[0];
+        return interaction.update({
+          content: "Now choose an item:",
+          components: itemSelectComponents(category),
+        });
+      }
 
-    return interaction.update({
-      content: "Selected item — how many?",
-      components: qtyButtonsComponents(category, sku),
-    });
-  }
-}
+      if (customId.startsWith("select_item:")) {
+        const [, category] = customId.split(":");
+        const sku = interaction.values[0];
 
- /* ------------------------------ MODAL SUBMITS ------------------------------ */
-
-if (interaction.isModalSubmit()) {
+        return interaction.update({
+          content: "Selected item — how many?",
+          components: qtyButtonsComponents(category, sku),
+        });
+      }
+    }
 
     /* ------------------------------ MODAL SUBMITS ------------------------------ */
 
@@ -1179,8 +1175,7 @@ if (interaction.isModalSubmit()) {
         });
       }
     }
-  }
-  catch (err) {
+  } catch (err) {
     console.error(err);
 
     if (!interaction.isRepliable()) return;
