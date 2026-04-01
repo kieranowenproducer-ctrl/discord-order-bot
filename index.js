@@ -3,11 +3,9 @@
 // - No cart_json usage
 // - Modal limited to 5 inputs
 // - Creates private receipt channels for each order
-// CHANGE: Bank transfer details shown in receipt channel instead of staff adding a payment link
-// NOTE: "Mark as paid" button is kept, and the old paylink code is kept (just not surfaced in UI)
-
-// ✅ LAST CHANGE IN THIS VERSION (ONLY):
-// Added the requested payment reference disclaimer at the very end of the receipt embed.
+// - Bank transfer details shown in receipt channel
+// - Discount code support added
+// - Welcome discount: WELCOME10 = 10% off products only, first order only
 
 const {
   Client,
@@ -48,14 +46,17 @@ const BANK_ACCOUNT_NAME = process.env.BANK_ACCOUNT_NAME || "YOUR COMPANY LTD";
 const BANK_SORT_CODE = process.env.BANK_SORT_CODE || "00-00-00";
 const BANK_ACCOUNT_NUMBER = process.env.BANK_ACCOUNT_NUMBER || "00000000";
 const BANK_BANK_NAME = process.env.BANK_BANK_NAME || "YOUR BANK";
-const BANK_IBAN = process.env.BANK_IBAN || ""; // optional
-const BANK_SWIFT = process.env.BANK_SWIFT || ""; // optional
+const BANK_IBAN = process.env.BANK_IBAN || "";
+const BANK_SWIFT = process.env.BANK_SWIFT || "";
 
 const STORE_NAME = "Bodymarket Labs";
 
 // Since we removed size/colour selection, we keep these fixed to avoid changing DB schema/logic.
 const DEFAULT_SIZE = "Standard";
 const DEFAULT_COLOR = "Standard";
+
+const WELCOME_CODE = "WELCOME10";
+const WELCOME_DISCOUNT_PERCENT = 10;
 
 function requireEnv(name, value) {
   if (!value) throw new Error(`Missing required env var: ${name}`);
@@ -108,9 +109,14 @@ async function initDb() {
       cart_id BIGSERIAL PRIMARY KEY,
       user_id TEXT UNIQUE NOT NULL,
       status TEXT NOT NULL DEFAULT 'open',
+      discount_code TEXT,
+      discount_percent INT NOT NULL DEFAULT 0,
       updated_at TIMESTAMPTZ DEFAULT NOW()
     );
   `);
+
+  await pool.query(`ALTER TABLE IF EXISTS carts ADD COLUMN IF NOT EXISTS discount_code TEXT;`);
+  await pool.query(`ALTER TABLE IF EXISTS carts ADD COLUMN IF NOT EXISTS discount_percent INT NOT NULL DEFAULT 0;`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS cart_items (
@@ -137,6 +143,9 @@ async function initDb() {
       subtotal_pence INT NOT NULL,
       shipping_pence INT NOT NULL,
       total_pence INT NOT NULL,
+      discount_code TEXT,
+      discount_percent INT NOT NULL DEFAULT 0,
+      discount_amount_pence INT NOT NULL DEFAULT 0,
       status TEXT NOT NULL DEFAULT 'pending',
       receipt_channel_id TEXT,
       payment_url TEXT,
@@ -149,6 +158,9 @@ async function initDb() {
   await pool.query(`ALTER TABLE IF EXISTS orders ADD COLUMN IF NOT EXISTS full_address TEXT;`);
   await pool.query(`ALTER TABLE IF EXISTS orders ADD COLUMN IF NOT EXISTS country TEXT;`);
   await pool.query(`ALTER TABLE IF EXISTS orders ADD COLUMN IF NOT EXISTS shipping_pence INT;`);
+  await pool.query(`ALTER TABLE IF EXISTS orders ADD COLUMN IF NOT EXISTS discount_code TEXT;`);
+  await pool.query(`ALTER TABLE IF EXISTS orders ADD COLUMN IF NOT EXISTS discount_percent INT NOT NULL DEFAULT 0;`);
+  await pool.query(`ALTER TABLE IF EXISTS orders ADD COLUMN IF NOT EXISTS discount_amount_pence INT NOT NULL DEFAULT 0;`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS order_items (
@@ -196,7 +208,9 @@ async function getOrCreateCart(userId) {
   if (existing.rows.length) return existing.rows[0].cart_id;
 
   const created = await pool.query(
-    `INSERT INTO carts (user_id, status, updated_at) VALUES ($1, 'open', NOW()) RETURNING cart_id`,
+    `INSERT INTO carts (user_id, status, discount_code, discount_percent, updated_at)
+     VALUES ($1, 'open', NULL, 0, NOW())
+     RETURNING cart_id`,
     [userId]
   );
   return created.rows[0].cart_id;
@@ -237,8 +251,105 @@ async function getCartSummary(userId) {
   return { items, subtotal_pence };
 }
 
+async function getCartDiscount(userId) {
+  const res = await pool.query(
+    `SELECT discount_code, discount_percent FROM carts WHERE user_id=$1 AND status='open'`,
+    [userId]
+  );
+
+  if (!res.rows.length) {
+    return { discount_code: null, discount_percent: 0 };
+  }
+
+  return {
+    discount_code: res.rows[0].discount_code || null,
+    discount_percent: Number(res.rows[0].discount_percent || 0),
+  };
+}
+
+async function setCartDiscount(userId, code, percent) {
+  const cartId = await getOrCreateCart(userId);
+
+  await pool.query(
+    `
+    UPDATE carts
+    SET discount_code=$1,
+        discount_percent=$2,
+        updated_at=NOW()
+    WHERE cart_id=$3
+    `,
+    [code, percent, cartId]
+  );
+}
+
+async function clearCartDiscount(userId) {
+  await pool.query(
+    `
+    UPDATE carts
+    SET discount_code=NULL,
+        discount_percent=0,
+        updated_at=NOW()
+    WHERE user_id=$1 AND status='open'
+    `,
+    [userId]
+  );
+}
+
+async function hasUserPlacedOrderBefore(userId) {
+  const res = await pool.query(
+    `SELECT 1 FROM orders WHERE user_id=$1 LIMIT 1`,
+    [userId]
+  );
+  return res.rows.length > 0;
+}
+
+function calculateDiscountedTotals(subtotal, shipping, discountPercent) {
+  const safePercent = Math.max(0, Math.min(100, Number(discountPercent || 0)));
+  const discountAmount = Math.round(subtotal * (safePercent / 100));
+  const total = subtotal - discountAmount + shipping;
+
+  return {
+    discountPercent: safePercent,
+    discountAmount,
+    total,
+  };
+}
+
 function money(pence) {
   return `£${(pence / 100).toFixed(2)}`;
+}
+
+async function buildCartMessage(userId, heading = "✅ **Added to basket.**") {
+  const cart = await getCartSummary(userId);
+  const profile = await getUserShippingProfile(userId);
+  const shippingPence = getShippingPenceForCountry(profile?.country);
+
+  const discount = await getCartDiscount(userId);
+  const totals = calculateDiscountedTotals(
+    cart.subtotal_pence,
+    shippingPence,
+    discount.discount_percent
+  );
+
+  const basketLines = cart.items.map(
+    (it) => `• **${it.name}** (${it.size}, ${it.color}) × ${it.qty} — ${money(it.qty * it.price_pence)}`
+  );
+
+  let content =
+    `${heading}\n\n` +
+    `**Your basket**\n` +
+    `${basketLines.join("\n") || "_No items_"}\n\n` +
+    `**Subtotal:** ${money(cart.subtotal_pence)}\n`;
+
+  if (totals.discountAmount > 0) {
+    content += `**Discount (${discount.discount_code}):** -${money(totals.discountAmount)}\n`;
+  }
+
+  content +=
+    `**Shipping:** ${money(shippingPence)}\n` +
+    `**Total:** ${money(totals.total)}`;
+
+  return content;
 }
 
 /* ----------------------------- SHIPPING LOGIC ---------------------------- */
@@ -300,100 +411,100 @@ async function getUserShippingProfile(userId) {
 /* ----------------------------- SHOP CATALOG ----------------------------- */
 
 const CATALOG = {
-  "​💉 FEATURED PENS/SPECIAL OFFERS": [
-    { sku: "A01", name: "APEX PHARMA 40mg Retatrutide", price_pence: 14000 },
-    { sku: "A02", name: "APEX Wolverine BPC/TB Pen 20/20​", price_pence: 12000 },
-    { sku: "A03", name: "REMEDIUM Research Retatrutide 30mg (due in soon)", price_pence: 14000 },
-    { sku: "A04", name: "REVION Glow Pens 70mg", price_pence: 11000 },
-    { sku: "A05", name: "✨ SIGNATURE GLOW UP STACK (BEST SELLER)", price_pence: 16000 },
-    { sku: "A06", name: "🔥 ULTIMATE FAT LOSS STACK", price_pence: 17000 },
-    { sku: "A07", name: "🌸 SLIM & TONE STACK", price_pence: 15000 },
-    { sku: "A08", name: "⚡ LEAN MASS STACK", price_pence: 16000 },
-    { sku: "A09", name: "🔥 WAIST SNATCH STACK", price_pence: 11000 },
-    { sku: "A10", name: "🔥 SHRED & PERFORMANCE STACK", price_pence: 11000 },
-    { sku: "A11", name: "💎 FULL BODY RESET (PREMIUM)", price_pence: 10000 },
-    { sku: "A12", name: "💪 WOLVERINE RECOVERY STACK", price_pence: 7000 },
-    { sku: "A13", name: "✨ GLOW & RECOVERY STACK", price_pence: 7000 },
-    { sku: "A14", name: "🧬 GH MAX STACK", price_pence: 6000 },
-    { sku: "A15", name: "⚡ MITO ENERGY STACK", price_pence: 8500 },
-    { sku: "A16", name: "🌿 LEAN & CONFIDENT STACK", price_pence: 14000 },
-    { sku: "A17", name: "☀️ SUMMER READY STACK", price_pence: 5000 },
-    { sku: "A18", name: "💋 CONFIDENCE STACK", price_pence: 3500 },
+  "​✨ FEATURED COLLECTION / SPECIAL OFFERS": [
+    { sku: "A01", name: "Item A1", price_pence: 14000 },
+    { sku: "A02", name: "Item A2", price_pence: 12000 },
+    { sku: "A03", name: "Item A3", price_pence: 14000 },
+    { sku: "A04", name: "Item A4", price_pence: 11000 },
+    { sku: "A05", name: "Item A5", price_pence: 16000 },
+    { sku: "A06", name: "Item A6", price_pence: 17000 },
+    { sku: "A07", name: "Item A7", price_pence: 15000 },
+    { sku: "A08", name: "Item A8", price_pence: 16000 },
+    { sku: "A09", name: "Item A9", price_pence: 11000 },
+    { sku: "A10", name: "Item A10", price_pence: 11000 },
+    { sku: "A11", name: "Item A11", price_pence: 10000 },
+    { sku: "A12", name: "Item A12", price_pence: 7000 },
+    { sku: "A13", name: "Item A13", price_pence: 7000 },
+    { sku: "A14", name: "Item A14", price_pence: 6000 },
+    { sku: "A15", name: "Item A15", price_pence: 8500 },
+    { sku: "A16", name: "Item A16", price_pence: 14000 },
+    { sku: "A17", name: "Item A17", price_pence: 5000 },
+    { sku: "A18", name: "Item A18", price_pence: 3500 },
   ],
-  "🧬 POPULAR PEPTIDES (Vials)​": [
-    { sku: "B01", name: "🧪 Retatrutide (50mg)", price_pence: 13000 },
-    { sku: "B02", name: "🧪 Retatrutide (10mg)​", price_pence: 5000 },
-    { sku: "B03", name: "🧪 Tirzepatide (40mg)​", price_pence: 9000 },
-    { sku: "B04", name: "🧪 MT2 (Tanning) (10mg)​", price_pence: 2000 },
+  "🧩 CATEGORY B": [
+    { sku: "B01", name: "Item B1", price_pence: 13000 },
+    { sku: "B02", name: "Item B2", price_pence: 5000 },
+    { sku: "B03", name: "Item B3", price_pence: 9000 },
+    { sku: "B04", name: "Item B4", price_pence: 2000 },
   ],
-  "​💪 RECOVERY / HEALING": [
-    { sku: "C01", name: "BPC-157 + TB-500 Blend (15mg/15mg)​", price_pence: 6000 },
-    { sku: "C02", name: "Glow Blend (BPC-157 + TB-500 + GHK-CU) (70mg)​", price_pence: 5500 },
-    { sku: "C03", name: "KLOW Combo (BPC-157 + TB-500 + GHK-CU + KPV) (80mg)", price_pence: 7000 },
+  "📦 CATEGORY C": [
+    { sku: "C01", name: "Item C1", price_pence: 6000 },
+    { sku: "C02", name: "Item C2", price_pence: 5500 },
+    { sku: "C03", name: "Item C3", price_pence: 7000 },
   ],
-  "🧬 GH PEPTIDES​": [
-    { sku: "D01", name: "CJC-1295 (10mg)​", price_pence: 3000 },
-    { sku: "D02", name: "Ipamorelin (10mg)​", price_pence: 4000 },
-    { sku: "D03", name: "Stack Price", price_pence: 6500 },
+  "🧷 CATEGORY D": [
+    { sku: "D01", name: "Item D1", price_pence: 3000 },
+    { sku: "D02", name: "Item D2", price_pence: 4000 },
+    { sku: "D03", name: "Item D3", price_pence: 6500 },
   ],
-  "⚡PERFORMANCE / FAT LOSS": [
-    { sku: "E01", name: "APEX PHARMA Reta Pen (40mg)", price_pence: 14000, sizes: ["Standard"], colors: ["Default"] },
-    { sku: "E02", name: "REMEDIUM Tirz Pen (30mg)", price_pence: 11500, sizes: ["Standard"], colors: ["Default"] },
-    { sku: "E03", name: "Retatrutide Vial (50mg)", price_pence: 13000, sizes: ["Standard"], colors: ["Default"] },
-    { sku: "E04", name: "Retatrutide Vial (10mg)", price_pence: 5000, sizes: ["Standard"], colors: ["Default"] },
-    { sku: "E05", name: "Tirzepatide Vial (40mg)", price_pence: 9000, sizes: ["Standard"], colors: ["Default"] },
-    { sku: "E06", name: "AOD-9604 (10mg)", price_pence: 3500, sizes: ["Standard"], colors: ["Default"] },
-    { sku: "E07", name: "5-Amino-1MQ (10mg)", price_pence: 3000, sizes: ["Standard"], colors: ["Default"] },
-    { sku: "E08", name: "SLU-PP-332 (5mg)", price_pence: 3500, sizes: ["Standard"], colors: ["Default"] },
+  "⚡ CATEGORY E": [
+    { sku: "E01", name: "Item E1", price_pence: 14000, sizes: ["Standard"], colors: ["Default"] },
+    { sku: "E02", name: "Item E2", price_pence: 11500, sizes: ["Standard"], colors: ["Default"] },
+    { sku: "E03", name: "Item E3", price_pence: 13000, sizes: ["Standard"], colors: ["Default"] },
+    { sku: "E04", name: "Item E4", price_pence: 5000, sizes: ["Standard"], colors: ["Default"] },
+    { sku: "E05", name: "Item E5", price_pence: 9000, sizes: ["Standard"], colors: ["Default"] },
+    { sku: "E06", name: "Item E6", price_pence: 3500, sizes: ["Standard"], colors: ["Default"] },
+    { sku: "E07", name: "Item E7", price_pence: 3000, sizes: ["Standard"], colors: ["Default"] },
+    { sku: "E08", name: "Item E8", price_pence: 3500, sizes: ["Standard"], colors: ["Default"] },
   ],
-  "💤 PAIN & SLEEP": [
-    { sku: "F01", name: "Melatonin 5mg (100 tabs)", price_pence: 1500, sizes: ["Standard"], colors: ["Default"] },
-    { sku: "F02", name: "Zopiclone 10mg (140 tabs)", price_pence: 4000, sizes: ["Standard"], colors: ["Default"] },
-    { sku: "F03", name: "Diaz (10 tabs) (10mg)", price_pence: 1000, sizes: ["Standard"], colors: ["Default"] },
-    { sku: "F04", name: "Diaz (30 tabs) (10mg)", price_pence: 2500, sizes: ["Standard"], colors: ["Default"] },
-    { sku: "F05", name: "UK Pregabalin (150 caps) (300mg)", price_pence: 5000, sizes: ["Standard"], colors: ["Default"] },
-    { sku: "F06", name: "UK Tramadol (100 tabs) (50mg)", price_pence: 6000, sizes: ["Standard"], colors: ["Default"] },
-    { sku: "F07", name: "DHC Codeine UK Accord (100 tabs) (30mg)", price_pence: 6000, sizes: ["Standard"], colors: ["Default"] },
+  "🌙 CATEGORY F": [
+    { sku: "F01", name: "Item F1", price_pence: 1500, sizes: ["Standard"], colors: ["Default"] },
+    { sku: "F02", name: "Item F2", price_pence: 4000, sizes: ["Standard"], colors: ["Default"] },
+    { sku: "F03", name: "Item F3", price_pence: 1000, sizes: ["Standard"], colors: ["Default"] },
+    { sku: "F04", name: "Item F4", price_pence: 2500, sizes: ["Standard"], colors: ["Default"] },
+    { sku: "F05", name: "Item F5", price_pence: 5000, sizes: ["Standard"], colors: ["Default"] },
+    { sku: "F06", name: "Item F6", price_pence: 6000, sizes: ["Standard"], colors: ["Default"] },
+    { sku: "F07", name: "Item F7", price_pence: 6000, sizes: ["Standard"], colors: ["Default"] },
   ],
-  "🧪 SPECIALIST": [
-    { sku: "G01", name: "IGF-1 LR3 (1mg)", price_pence: 4500, sizes: ["Standard"], colors: ["Default"] },
-    { sku: "G02", name: "Tesamorelin (20mg)", price_pence: 6500, sizes: ["Standard"], colors: ["Default"] },
-    { sku: "G03", name: "MOTS-C (40mg)", price_pence: 5500, sizes: ["Standard"], colors: ["Default"] },
-    { sku: "G04", name: "NAD+ (500mg)", price_pence: 4500, sizes: ["Standard"], colors: ["Default"] },
-    { sku: "G05", name: "GHK-CU (50mg)", price_pence: 2500, sizes: ["Standard"], colors: ["Default"] },
-    { sku: "G06", name: "KPV (10mg)", price_pence: 2500, sizes: ["Standard"], colors: ["Default"] },
-    { sku: "G07", name: "PT-141 (10mg)", price_pence: 2000, sizes: ["Standard"], colors: ["Default"] },
+  "🧪 CATEGORY G": [
+    { sku: "G01", name: "Item G1", price_pence: 4500, sizes: ["Standard"], colors: ["Default"] },
+    { sku: "G02", name: "Item G2", price_pence: 6500, sizes: ["Standard"], colors: ["Default"] },
+    { sku: "G03", name: "Item G3", price_pence: 5500, sizes: ["Standard"], colors: ["Default"] },
+    { sku: "G04", name: "Item G4", price_pence: 4500, sizes: ["Standard"], colors: ["Default"] },
+    { sku: "G05", name: "Item G5", price_pence: 2500, sizes: ["Standard"], colors: ["Default"] },
+    { sku: "G06", name: "Item G6", price_pence: 2500, sizes: ["Standard"], colors: ["Default"] },
+    { sku: "G07", name: "Item G7", price_pence: 2000, sizes: ["Standard"], colors: ["Default"] },
   ],
-  "💉 INJECTABLE OILS — CROWN PHARMA": [
-    { sku: "H01", name: "Test (400mg) (coming soon)", price_pence: 3500, sizes: ["Standard"], colors: ["Default"] },
-    { sku: "H02", name: "Test E (300mg)", price_pence: 3000, sizes: ["Standard"], colors: ["Default"] },
-    { sku: "H03", name: "Test Cyp (250mg)", price_pence: 3000, sizes: ["Standard"], colors: ["Default"] },
-    { sku: "H04", name: "Test Prop (120mg)", price_pence: 2500, sizes: ["Standard"], colors: ["Default"] },
-    { sku: "H05", name: "Sustanon (300mg)", price_pence: 3000, sizes: ["Standard"], colors: ["Default"] },
-    { sku: "H06", name: "Deca (330mg)", price_pence: 3500, sizes: ["Standard"], colors: ["Default"] },
-    { sku: "H07", name: "NPP (150mg)", price_pence: 3500, sizes: ["Standard"], colors: ["Default"] },
-    { sku: "H08", name: "RIP Blend 200 (Test Prop / Tren Ace / Mast Prop)", price_pence: 3500, sizes: ["Standard"], colors: ["Default"] },
+  "🛍 CATEGORY H": [
+    { sku: "H01", name: "Item H1", price_pence: 3500, sizes: ["Standard"], colors: ["Default"] },
+    { sku: "H02", name: "Item H2", price_pence: 3000, sizes: ["Standard"], colors: ["Default"] },
+    { sku: "H03", name: "Item H3", price_pence: 3000, sizes: ["Standard"], colors: ["Default"] },
+    { sku: "H04", name: "Item H4", price_pence: 2500, sizes: ["Standard"], colors: ["Default"] },
+    { sku: "H05", name: "Item H5", price_pence: 3000, sizes: ["Standard"], colors: ["Default"] },
+    { sku: "H06", name: "Item H6", price_pence: 3500, sizes: ["Standard"], colors: ["Default"] },
+    { sku: "H07", name: "Item H7", price_pence: 3500, sizes: ["Standard"], colors: ["Default"] },
+    { sku: "H08", name: "Item H8", price_pence: 3500, sizes: ["Standard"], colors: ["Default"] },
   ],
-  "💊 SEXUAL HEALTH​": [
-    { sku: "I01", name: "Kamagra Jelly (7 sachets)", price_pence: 1000 },
-    { sku: "I02", name: "​Viagra (100 tabs)", price_pence: 3500 },
-    { sku: "I03", name: "Cialis (100 tabs) (coming soon)​", price_pence: 3500 },
-    { sku: "I04", name: "​Cialis Individual Strip (10 tabs)", price_pence: 1000 },
+  "💡 CATEGORY I": [
+    { sku: "I01", name: "Item I1", price_pence: 1000 },
+    { sku: "I02", name: "Item I2", price_pence: 3500 },
+    { sku: "I03", name: "Item I3", price_pence: 3500 },
+    { sku: "I04", name: "Item I4", price_pence: 1000 },
   ],
-  "🛡 PCT & AI": [
-    { sku: "J01", name: "HCG 5000IU", price_pence: 2500 },
-    { sku: "J02", name: "Clomid (100 tabs)​", price_pence: 2500 },
-    { sku: "J03", name: "Tamoxifen (100 tabs)", price_pence: 2500 },
-    { sku: "J04", name: "Arimidex (10 tabs) (1mg)​", price_pence: 2000 },
-    { sku: "J05", name: "Telmisartan (150 tabs)​ (40mg)", price_pence: 2500 },
+  "🛡 CATEGORY J": [
+    { sku: "J01", name: "Item J1", price_pence: 2500 },
+    { sku: "J02", name: "Item J2", price_pence: 2500 },
+    { sku: "J03", name: "Item J3", price_pence: 2500 },
+    { sku: "J04", name: "Item J4", price_pence: 2000 },
+    { sku: "J05", name: "Item J5", price_pence: 2500 },
   ],
   "📦 EXTRAS": [
-    { sku: "K01", name: "Modafinil (100 tabs) (200mg)", price_pence: 4500 },
-    { sku: "K02", name: "Kenalog Hayfever Injection (10ml)", price_pence: 2500 },
-    { sku: "K03", name: "Bac Mixing Water (3ml)", price_pence: 500 },
-    { sku: "K04", name: "1ml Syringes (x20)", price_pence: 500 },
-    { sku: "K05", name: "Accutane (100 tabs) (20mg) (coming soon)", price_pence: 4500 },
-    { sku: "K06", name: "Vitamin B12 injections (10×1ml) (coming soon)", price_pence: 2000 },
+    { sku: "K01", name: "Item K1", price_pence: 4500 },
+    { sku: "K02", name: "Item K2", price_pence: 2500 },
+    { sku: "K03", name: "Item K3", price_pence: 500 },
+    { sku: "K04", name: "Item K4", price_pence: 500 },
+    { sku: "K05", name: "Item K5", price_pence: 4500 },
+    { sku: "K06", name: "Item K6", price_pence: 2000 },
   ],
 };
 
@@ -464,7 +575,7 @@ function itemSelectComponents(category) {
         .setPlaceholder("Choose an item…")
         .addOptions(
           items.map((it) => ({
-            label: `${it.name} — ${money(it.price_pence)}`,
+            label: `${it.name} — ${money(it.price_pence)}`.slice(0, 100),
             value: it.sku,
           }))
         )
@@ -493,6 +604,7 @@ function cartActionsComponents() {
   return [
     new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId("cart_add_more").setLabel("Add Another Item").setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId("cart_discount").setLabel("Apply Discount Code").setStyle(ButtonStyle.Primary),
       new ButtonBuilder().setCustomId("cart_submit").setLabel("Submit Order ✅").setStyle(ButtonStyle.Success),
       new ButtonBuilder().setCustomId("cart_clear").setLabel("Clear Cart").setStyle(ButtonStyle.Danger)
     ),
@@ -558,6 +670,19 @@ function qtyOtherModal(category, sku) {
   return modal;
 }
 
+function discountCodeModal() {
+  const modal = new ModalBuilder().setCustomId("discount_code_modal").setTitle("Apply discount code");
+
+  const code = new TextInputBuilder()
+    .setCustomId("discount_code")
+    .setLabel("Enter discount code")
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true);
+
+  modal.addComponents(new ActionRowBuilder().addComponents(code));
+  return modal;
+}
+
 // Old flow kept (not used in UI anymore)
 function paymentLinkModal(orderId) {
   const modal = new ModalBuilder().setCustomId(`paylink_modal:${orderId}`).setTitle("Add payment link");
@@ -607,46 +732,58 @@ function bankDetailsText(orderId) {
   );
 }
 
-function receiptEmbed(orderId, items, subtotal, shipping, total, shippingProfile) {
+function receiptEmbed(orderId, items, subtotal, discountAmount, discountCode, shipping, total, shippingProfile) {
   const lines = items.map(
     (it) => `• **${it.name}** (${it.size}, ${it.color}) × ${it.qty} — ${money(it.qty * it.price_pence)}`
+  );
+
+  const fields = [
+    { name: "Subtotal", value: money(subtotal), inline: true },
+  ];
+
+  if (discountAmount > 0) {
+    fields.push({
+      name: "Discount",
+      value: `${discountCode || "Code"} (-${money(discountAmount)})`,
+      inline: true,
+    });
+  }
+
+  fields.push(
+    { name: "Shipping", value: money(shipping), inline: true },
+    { name: "Total", value: money(total), inline: true },
+    {
+      name: "Shipping to",
+      value:
+        `${shippingProfile.full_name}\n` +
+        `${shippingProfile.email}\n` +
+        `${shippingProfile.phone}\n` +
+        `${shippingProfile.full_address}\n` +
+        `${shippingProfile.country}`,
+    },
+    {
+      name: "Payment — Bank Transfer",
+      value:
+        `Please pay the **Total** via bank transfer using the details below.\n` +
+        `Once paid, a staff member will confirm and mark the order as paid.\n\n` +
+        bankDetailsText(orderId),
+    },
+    { name: "Dispatch", value: "Cut-off: **15:30 (Mon–Fri Dispatch)**" },
+    {
+      name: "Overseas disclaimer",
+      value: "Shipping is at your own risk. No reships or refunds for customs seizures. By ordering, you accept these terms.",
+    },
+    {
+      name: "IMPORTANT — Payment Reference",
+      value:
+        "PLEASE NOTE- if you use any other reference when making the payment or mention a product as the reference, the order will be cancelled and your money will not be refunded. Please ensure that the reference number is as per The invoice/order summary",
+    }
   );
 
   return new EmbedBuilder()
     .setTitle(`${STORE_NAME} — Receipt (Order #${orderId})`)
     .setDescription(lines.join("\n") || "_No items_")
-    .addFields(
-      { name: "Subtotal", value: money(subtotal), inline: true },
-      { name: "Shipping", value: money(shipping), inline: true },
-      { name: "Total", value: money(total), inline: true },
-      {
-        name: "Shipping to",
-        value:
-          `${shippingProfile.full_name}\n` +
-          `${shippingProfile.email}\n` +
-          `${shippingProfile.phone}\n` +
-          `${shippingProfile.full_address}\n` +
-          `${shippingProfile.country}`,
-      },
-      {
-        name: "Payment — Bank Transfer",
-        value:
-          `Please pay the **Total** via bank transfer using the details below.\n` +
-          `Once paid, a staff member will confirm and mark the order as paid.\n\n` +
-          bankDetailsText(orderId),
-      },
-      { name: "Dispatch", value: "Cut-off: **15:30 (Mon–Fri Dispatch)**" },
-      {
-        name: "Overseas disclaimer",
-        value: "Shipping is at your own risk. No reships or refunds for customs seizures. By ordering, you accept these terms.",
-      },
-      // ✅ NEW: requested disclaimer (added at the very end)
-      {
-        name: "IMPORTANT — Payment Reference",
-        value:
-          "PLEASE NOTE- if you use any other reference when making the payment or mention a product as the reference, the order will be cancelled and your money will not be refunded. Please ensure that the reference number is as per The invoice/order summary",
-      }
-    )
+    .addFields(fields)
     .setFooter({ text: "Pay by bank transfer using the reference shown above." });
 }
 
@@ -682,7 +819,8 @@ client.on("interactionCreate", async (interaction) => {
           `2) Enter your shipping details\n` +
           `3) Browse categories and select items\n` +
           `4) Add multiple items to your basket\n` +
-          `5) Submit your order when you're done\n\n` +
+          `5) Apply ${WELCOME_CODE} on your first order for 10% off products only\n` +
+          `6) Submit your order when you're done\n\n` +
           `**Shipping:** UK Tracked £10 • Europe £35 • USA £45\n` +
           `**Cut-off:** 15:30 (Mon–Fri Dispatch)\n\n` +
           `Once submitted, you'll receive a **private receipt channel** with **bank transfer details** to pay.`;
@@ -718,22 +856,10 @@ client.on("interactionCreate", async (interaction) => {
           price_pence: item.price_pence,
         });
 
-        const cart = await getCartSummary(interaction.user.id);
-        const profile = await getUserShippingProfile(interaction.user.id);
-        const shippingPence = getShippingPenceForCountry(profile?.country);
-
-        const basketLines = cart.items.map(
-          (it) => `• **${it.name}** (${it.size}, ${it.color}) × ${it.qty} — ${money(it.qty * it.price_pence)}`
-        );
+        const content = await buildCartMessage(interaction.user.id);
 
         return interaction.reply({
-          content:
-            `✅ **Added to basket.**\n\n` +
-            `**Your basket**\n` +
-            `${basketLines.join("\n")}\n\n` +
-            `**Subtotal:** ${money(cart.subtotal_pence)}\n` +
-            `**Shipping:** ${money(shippingPence)}\n` +
-            `**Total:** ${money(cart.subtotal_pence + shippingPence)}`,
+          content,
           components: cartActionsComponents(),
           ephemeral: true,
         });
@@ -746,6 +872,15 @@ client.on("interactionCreate", async (interaction) => {
 
       if (customId === "cart_add_more") {
         return interaction.reply({ content: "Choose a category:", components: categorySelectComponents(), ephemeral: true });
+      }
+
+      if (customId === "cart_discount") {
+        const cart = await getCartSummary(interaction.user.id);
+        if (!cart.items.length) {
+          return interaction.reply({ content: "Your cart is empty.", ephemeral: true });
+        }
+
+        return interaction.showModal(discountCodeModal());
       }
 
       if (customId === "cart_clear") {
@@ -767,15 +902,31 @@ client.on("interactionCreate", async (interaction) => {
 
         const subtotal = cart.subtotal_pence;
         const shipping = getShippingPenceForCountry(shippingProfile.country);
-        const total = subtotal + shipping;
+
+        const discount = await getCartDiscount(interaction.user.id);
+
+        if (discount.discount_code) {
+          const hasOrderedBefore = await hasUserPlacedOrderBefore(interaction.user.id);
+          if (hasOrderedBefore) {
+            await clearCartDiscount(interaction.user.id);
+            return interaction.reply({
+              content: "That welcome code is only valid on your first order and cannot be used here.",
+              ephemeral: true,
+            });
+          }
+        }
+
+        const totals = calculateDiscountedTotals(subtotal, shipping, discount.discount_percent);
+        const total = totals.total;
 
         const orderRes = await pool.query(
           `
           INSERT INTO orders (
             user_id, full_name, email, phone, full_address, country,
-            subtotal_pence, shipping_pence, total_pence, status
+            subtotal_pence, shipping_pence, total_pence, discount_code,
+            discount_percent, discount_amount_pence, status
           )
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending')
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'pending')
           RETURNING order_id
           `,
           [
@@ -788,6 +939,9 @@ client.on("interactionCreate", async (interaction) => {
             subtotal,
             shipping,
             total,
+            discount.discount_code,
+            discount.discount_percent,
+            totals.discountAmount,
           ]
         );
 
@@ -813,7 +967,18 @@ client.on("interactionCreate", async (interaction) => {
             `<@${interaction.user.id}> **Thanks!** Your order has been received.\n\n` +
             `✅ Please pay by **bank transfer** using the details in the receipt below.\n` +
             `<@&${STAFF_ROLE_ID}> once confirmed, please mark as paid.`,
-          embeds: [receiptEmbed(orderId, cart.items, subtotal, shipping, total, shippingProfile)],
+          embeds: [
+            receiptEmbed(
+              orderId,
+              cart.items,
+              subtotal,
+              totals.discountAmount,
+              discount.discount_code,
+              shipping,
+              total,
+              shippingProfile
+            ),
+          ],
           components: staffReceiptControls(orderId),
         });
 
@@ -923,22 +1088,54 @@ client.on("interactionCreate", async (interaction) => {
           price_pence: item.price_pence,
         });
 
-        const cart = await getCartSummary(interaction.user.id);
-        const profile = await getUserShippingProfile(interaction.user.id);
-        const shippingPence = getShippingPenceForCountry(profile?.country);
-
-        const basketLines = cart.items.map(
-          (it) => `• **${it.name}** (${it.size}, ${it.color}) × ${it.qty} — ${money(it.qty * it.price_pence)}`
-        );
+        const content = await buildCartMessage(interaction.user.id);
 
         return interaction.reply({
-          content:
-            `✅ **Added to basket.**\n\n` +
-            `**Your basket**\n` +
-            `${basketLines.join("\n")}\n\n` +
-            `**Subtotal:** ${money(cart.subtotal_pence)}\n` +
-            `**Shipping:** ${money(shippingPence)}\n` +
-            `**Total:** ${money(cart.subtotal_pence + shippingPence)}`,
+          content,
+          components: cartActionsComponents(),
+          ephemeral: true,
+        });
+      }
+
+      if (customId === "discount_code_modal") {
+        const enteredRaw = interaction.fields.getTextInputValue("discount_code")?.trim();
+        const enteredCode = String(enteredRaw || "").toUpperCase();
+
+        if (!enteredCode) {
+          return interaction.reply({ content: "Please enter a code.", ephemeral: true });
+        }
+
+        const cart = await getCartSummary(interaction.user.id);
+        if (!cart.items.length) {
+          return interaction.reply({ content: "Your cart is empty.", ephemeral: true });
+        }
+
+        const existingDiscount = await getCartDiscount(interaction.user.id);
+        if (existingDiscount.discount_code) {
+          return interaction.reply({
+            content: `A code has already been applied to this order: ${existingDiscount.discount_code}`,
+            ephemeral: true,
+          });
+        }
+
+        if (enteredCode !== WELCOME_CODE) {
+          return interaction.reply({ content: "That discount code is invalid.", ephemeral: true });
+        }
+
+        const hasOrderedBefore = await hasUserPlacedOrderBefore(interaction.user.id);
+        if (hasOrderedBefore) {
+          return interaction.reply({
+            content: "This code is only valid on your first order.",
+            ephemeral: true,
+          });
+        }
+
+        await setCartDiscount(interaction.user.id, WELCOME_CODE, WELCOME_DISCOUNT_PERCENT);
+
+        const content = await buildCartMessage(interaction.user.id, "✅ Discount code applied.");
+
+        return interaction.reply({
+          content,
           components: cartActionsComponents(),
           ephemeral: true,
         });
