@@ -753,7 +753,7 @@ function staffPanelComponents() {
     .setTitle("Staff Control Panel")
     .setDescription(
       [
-        "Use the buttons below to manage the mock shop.",
+        "Use the buttons below to manage the shop.",
         "",
         "Available actions:",
         "• Adjust stock",
