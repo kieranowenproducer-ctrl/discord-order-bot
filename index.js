@@ -1296,10 +1296,48 @@ function staffReceiptControls(orderId, status = "pending") {
 
 /* ------------------------------ INTERACTIONS ----------------------------- */
 
-const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
-  partials: [Partials.Channel],
-});
+/* ------------------------------ INTERACTIONS ----------------------------- */
+
+const CART_UI_MESSAGES = new Map();
+
+async function getTrackedCartUiMessage(userId, channel) {
+  const tracked = CART_UI_MESSAGES.get(userId);
+  if (!tracked) return null;
+  if (tracked.channelId !== channel.id) return null;
+
+  const msg = await channel.messages.fetch(tracked.messageId).catch(() => null);
+  if (!msg) {
+    CART_UI_MESSAGES.delete(userId);
+    return null;
+  }
+
+  return msg;
+}
+
+function trackCartUiMessage(userId, channelId, messageId) {
+  CART_UI_MESSAGES.set(userId, { channelId, messageId });
+}
+
+function clearTrackedCartUiMessage(userId) {
+  CART_UI_MESSAGES.delete(userId);
+}
+
+async function sendOrEditCartUiMessage(interaction, payload) {
+  await interaction.deferReply({ ephemeral: true });
+
+  const existing = await getTrackedCartUiMessage(interaction.user.id, interaction.channel);
+
+  if (existing) {
+    await existing.edit(payload);
+    await interaction.deleteReply().catch(() => {});
+    return existing;
+  }
+
+  const sent = await interaction.channel.send(payload);
+  trackCartUiMessage(interaction.user.id, interaction.channel.id, sent.id);
+  await interaction.deleteReply().catch(() => {});
+  return sent;
+}
 
 client.on("interactionCreate", async (interaction) => {
   let deferred = false;
@@ -1521,15 +1559,25 @@ client.on("interactionCreate", async (interaction) => {
       }
 
       if (customId.startsWith("add_qty:")) {
+        trackCartUiMessage(interaction.user.id, interaction.channel.id, interaction.message.id);
+
         const [, category, sku, qtyStr] = customId.split(":");
         const qty = parseInt(qtyStr, 10);
 
         const item = (CATALOG[category] || []).find((x) => x.sku === sku);
-        if (!item) return interaction.reply({ content: "Item not found.", ephemeral: true });
+        if (!item) {
+          return interaction.update({
+            content: "❌ Item not found.",
+            components: categorySelectComponents(),
+          });
+        }
 
         const stockQty = await getStockForSku(item.sku);
         if (stockQty <= 0) {
-          return interaction.reply({ content: "That item is out of stock.", ephemeral: true });
+          return interaction.update({
+            content: "❌ That item is out of stock.",
+            components: categorySelectComponents(),
+          });
         }
 
         await addCartItem(interaction.user.id, {
@@ -1550,11 +1598,13 @@ client.on("interactionCreate", async (interaction) => {
       }
 
       if (customId.startsWith("add_qty_other:")) {
+        trackCartUiMessage(interaction.user.id, interaction.channel.id, interaction.message.id);
         const [, category, sku] = customId.split(":");
         return interaction.showModal(qtyOtherModal(category, sku));
       }
 
       if (customId === "cart_add_more") {
+        trackCartUiMessage(interaction.user.id, interaction.channel.id, interaction.message.id);
         return interaction.update({
           content: "Choose a category:",
           components: categorySelectComponents(),
@@ -1562,15 +1612,25 @@ client.on("interactionCreate", async (interaction) => {
       }
 
       if (customId === "cart_discount") {
+        trackCartUiMessage(interaction.user.id, interaction.channel.id, interaction.message.id);
+
         const cart = await getCartSummary(interaction.user.id);
         if (!cart.items.length) {
-          return interaction.reply({ content: "Your cart is empty.", ephemeral: true });
+          return interaction.update({
+            content:
+              "🗑️ **Basket empty**\n\n" +
+              "Your cart is empty.\n" +
+              "Choose a category below to start a new order:",
+            components: categorySelectComponents(),
+          });
         }
 
         return interaction.showModal(discountCodeModal());
       }
 
       if (customId === "cart_clear") {
+        trackCartUiMessage(interaction.user.id, interaction.channel.id, interaction.message.id);
+
         await clearCart(interaction.user.id);
 
         return interaction.update({
@@ -1582,11 +1642,13 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
-      if (customId === "cart_submit") {
+            if (customId === "cart_submit") {
+        trackCartUiMessage(interaction.user.id, interaction.channel.id, interaction.message.id);
+
         if (isSubmitLocked(interaction.user.id)) {
-          return interaction.reply({
+          return interaction.update({
             content: "Your order is already being processed. Please wait a few seconds.",
-            ephemeral: true,
+            components: cartActionsComponents(true),
           });
         }
 
@@ -1595,31 +1657,37 @@ client.on("interactionCreate", async (interaction) => {
         try {
           const existingPendingOrder = await hasUserPendingOrder(interaction.user.id);
           if (existingPendingOrder) {
-            return interaction.reply({
+            return interaction.update({
               content: "You already have an order awaiting completion. Please contact staff if needed.",
-              ephemeral: true,
+              components: cartActionsComponents(),
             });
           }
 
           const cart = await getCartSummary(interaction.user.id);
           if (!cart.items.length) {
-            return interaction.reply({ content: "Your cart is empty.", ephemeral: true });
+            return interaction.update({
+              content:
+                "🗑️ **Basket empty**\n\n" +
+                "Your cart is empty.\n" +
+                "Choose a category below to start a new order:",
+              components: categorySelectComponents(),
+            });
           }
 
           const shippingProfile = await getUserShippingProfile(interaction.user.id);
           if (!shippingProfile) {
-            return interaction.reply({
+            return interaction.update({
               content: "I don't have your shipping details yet. Click the menu button again and enter your details.",
-              ephemeral: true,
+              components: [],
             });
           }
 
           for (const it of cart.items) {
             const stockQty = await getStockForSku(it.sku);
             if (it.qty > stockQty) {
-              return interaction.reply({
+              return interaction.update({
                 content: `Stock changed. Only ${stockQty} left for ${it.name}. Please update your basket and try again.`,
-                ephemeral: true,
+                components: cartActionsComponents(),
               });
             }
           }
@@ -1634,9 +1702,9 @@ client.on("interactionCreate", async (interaction) => {
 
             if (!validation.valid) {
               await clearCartDiscount(interaction.user.id);
-              return interaction.reply({
+              return interaction.update({
                 content: `${validation.reason} The code has been removed from this basket.`,
-                ephemeral: true,
+                components: cartActionsComponents(),
               });
             }
 
@@ -1727,11 +1795,18 @@ client.on("interactionCreate", async (interaction) => {
             components: staffReceiptControls(orderId, "pending"),
           });
 
+          const trackedCartMessage = await getTrackedCartUiMessage(interaction.user.id, interaction.channel);
+
+          clearTrackedCartUiMessage(interaction.user.id);
           await clearCart(interaction.user.id);
 
-          return interaction.update({
+          if (trackedCartMessage) {
+            await trackedCartMessage.delete().catch(() => {});
+          }
+
+          return interaction.reply({
             content: `✅ Order submitted! Your private receipt channel is: <#${receiptChannel.id}>`,
-            components: [],
+            ephemeral: true,
           });
         } finally {
           clearSubmitLock(interaction.user.id);
@@ -1903,6 +1978,8 @@ client.on("interactionCreate", async (interaction) => {
       }
 
       if (customId === "select_category") {
+        trackCartUiMessage(interaction.user.id, interaction.channel.id, interaction.message.id);
+
         const category = interaction.values[0];
         const itemComponents = await itemSelectComponents(category);
 
@@ -1913,14 +1990,16 @@ client.on("interactionCreate", async (interaction) => {
       }
 
       if (customId.startsWith("select_item:")) {
+        trackCartUiMessage(interaction.user.id, interaction.channel.id, interaction.message.id);
+
         const [, category] = customId.split(":");
         const sku = interaction.values[0];
 
         const stockQty = await getStockForSku(sku);
         if (stockQty <= 0) {
-          return interaction.reply({
+          return interaction.update({
             content: "That item is out of stock.",
-            ephemeral: true,
+            components: categorySelectComponents(),
           });
         }
 
@@ -1949,11 +2028,13 @@ client.on("interactionCreate", async (interaction) => {
 
         await upsertProfile(interaction.user.id, full_name, email, phone, { full_address, country });
 
-        return interaction.reply({
+        const payload = {
           content: "✅ Details saved. Choose a category:",
           components: categorySelectComponents(),
-          ephemeral: true,
-        });
+        };
+
+        await sendOrEditCartUiMessage(interaction, payload);
+        return;
       }
 
       if (customId === "verify_submit_modal") {
@@ -2061,9 +2142,9 @@ client.on("interactionCreate", async (interaction) => {
           [qty, sku]
         );
 
-        return interaction.update({
-           content: `✅ Stock updated for **${item.name}** (${sku}) → ${qty}`,
-           components: [],
+        return interaction.reply({
+          content: `✅ Stock updated for **${item.name}** (${sku}) → ${qty}`,
+          ephemeral: true,
         });
       }
 
@@ -2222,11 +2303,11 @@ client.on("interactionCreate", async (interaction) => {
         });
 
         const content = await buildCartMessage(interaction.user.id);
-
-        return interaction.update({
+        await sendOrEditCartUiMessage(interaction, {
           content,
           components: cartActionsComponents(),
         });
+        return;
       }
 
       if (customId === "discount_code_modal") {
@@ -2261,12 +2342,11 @@ client.on("interactionCreate", async (interaction) => {
         await setCartDiscount(interaction.user.id, validation.code, validation.discount_percent);
 
         const content = await buildCartMessage(interaction.user.id, "✅ Discount code applied.");
-
-        return interaction.reply({
+        await sendOrEditCartUiMessage(interaction, {
           content,
           components: cartActionsComponents(),
-          ephemeral: true,
         });
+        return;
       }
     }
   } catch (err) {
