@@ -2604,112 +2604,118 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
-      if (customId === "cart_submit") {
-        trackCartUiMessage(interaction.user.id, interaction.channel.id, interaction.message.id);
+if (customId === "cart_submit") {
+  trackCartUiMessage(interaction.user.id, interaction.channel.id, interaction.message.id);
 
-        if (isSubmitLocked(interaction.user.id)) {
-          return interaction.update({
-            content: "Your order is already being processed. Please wait a few seconds.",
-            components: cartActionsComponents(true),
-          });
-        }
+  if (isSubmitLocked(interaction.user.id)) {
+    return interaction.update({
+      content: "Your order is already being processed. Please wait a few seconds.",
+      components: cartActionsComponents(true),
+    });
+  }
 
-          const cart = await getCartSummary(interaction.user.id);
-          if (!cart.items.length) {
-            return interaction.update({
-              content:
-                "🗑️ **Basket empty**\n\n" +
-                "Your cart is empty.\n" +
-                "Choose a category below to start a new order:",
-              components: await categorySelectComponents(),
-            });
-          }
+  setSubmitLock(interaction.user.id);
 
-          const shippingProfile = await getUserShippingProfile(interaction.user.id);
-          if (!shippingProfile) {
-            return interaction.update({
-              content: "I don't have your shipping details yet. Click the menu button again and enter your details.",
-              components: [],
-            });
-          }
+  try {
+    const cart = await getCartSummary(interaction.user.id);
 
-          const discount = await getCartDiscount(interaction.user.id);
+    if (!cart.items.length) {
+      return interaction.update({
+        content:
+          "🗑️ **Basket empty**\n\n" +
+          "Your cart is empty.\n" +
+          "Choose a category below to start a new order:",
+        components: await categorySelectComponents(),
+      });
+    }
 
-          const orderResult = await createOrderFromCart(
-            interaction.user.id,
-            shippingProfile,
-            cart,
-            discount
-          );
+    const shippingProfile = await getUserShippingProfile(interaction.user.id);
 
-          const receiptChannel = await createReceiptChannel(
-            interaction.guild,
-            interaction.user,
-            orderResult.orderId
-          );
+    if (!shippingProfile) {
+      return interaction.update({
+        content: "I don't have your shipping details yet. Click the menu button again and enter your details.",
+        components: [],
+      });
+    }
 
-          await pool.query(
-            `UPDATE orders SET receipt_channel_id = $1 WHERE order_id = $2`,
-            [receiptChannel.id, orderResult.orderId]
-          );
+    const discount = await getCartDiscount(interaction.user.id);
 
-          await receiptChannel.send({
-            content:
-              `<@${interaction.user.id}> **Thanks!** Your order has been received.\n\n` +
-              `✅ Please pay by **bank transfer** using the details in the receipt below.\n` +
-              `<@&${STAFF_ROLE_ID}> once confirmed, please mark as paid or dispatched when appropriate.`,
-            embeds: [
-              receiptEmbed(
-                orderResult.orderId,
-                cart.items,
-                orderResult.subtotal,
-                orderResult.discountAmount,
-                orderResult.discountCode,
-                orderResult.shipping,
-                orderResult.total,
-                shippingProfile,
-                "pending"
-              ),
-            ],
-            components: staffReceiptControls(orderResult.orderId, "pending"),
-          });
+    const orderResult = await createOrderFromCart(
+      interaction.user.id,
+      shippingProfile,
+      cart,
+      discount
+    );
 
-          const trackedCartMessage = await getTrackedCartUiMessage(interaction.user.id, interaction.channel);
-          const trackedShopChannel = await getTrackedShopSessionChannel(interaction.guild, interaction.user.id);
+    const receiptChannel = await createReceiptChannel(
+      interaction.guild,
+      interaction.user,
+      orderResult.orderId
+    );
 
-          clearTrackedCartUiMessage(interaction.user.id);
-          clearTrackedShopSessionChannel(interaction.user.id);
+    await pool.query(
+      `UPDATE orders SET receipt_channel_id = $1 WHERE order_id = $2`,
+      [receiptChannel.id, orderResult.orderId]
+    );
 
-          if (trackedCartMessage) {
-            await trackedCartMessage.delete().catch(() => {});
-          }
+    await receiptChannel.send({
+      content:
+        `<@${interaction.user.id}> **Thanks!** Your order has been received.\n\n` +
+        `✅ Please pay by **bank transfer** using the details in the receipt below.\n` +
+        `<@&${STAFF_ROLE_ID}> once confirmed, please mark as paid or dispatched when appropriate.`,
+      embeds: [
+        receiptEmbed(
+          orderResult.orderId,
+          cart.items,
+          orderResult.subtotal,
+          orderResult.discountAmount,
+          orderResult.discountCode,
+          orderResult.shipping,
+          orderResult.total,
+          shippingProfile,
+          "pending"
+        ),
+      ],
+      components: staffReceiptControls(orderResult.orderId, "pending"),
+    });
 
-          const continueRow = new ActionRowBuilder().addComponents(
-            new ButtonBuilder()
-              .setLabel("Continue to Receipt")
-              .setStyle(ButtonStyle.Link)
-              .setURL(`https://discord.com/channels/${interaction.guild.id}/${receiptChannel.id}`)
-          );
+    const trackedCartMessage = await getTrackedCartUiMessage(interaction.user.id, interaction.channel);
+    const trackedShopChannel = await getTrackedShopSessionChannel(interaction.guild, interaction.user.id);
 
-          await interaction.channel.send({
-            content: `✅ Order submitted. Your receipt channel is ready.\nThis private shopping channel will close in 20 seconds.`,
-            components: [continueRow],
-          });
+    clearTrackedCartUiMessage(interaction.user.id);
+    clearTrackedShopSessionChannel(interaction.user.id);
 
-          const channelToDelete = trackedShopChannel || interaction.channel;
+    if (trackedCartMessage) {
+      await trackedCartMessage.delete().catch(() => {});
+    }
 
-          setTimeout(async () => {
-            try {
-              await channelToDelete.delete("Shop session completed");
-            } catch (err) {
-              console.error("Failed to delete shop session channel:", err);
-            }
-          }, 20000);
+    const continueRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setLabel("Continue to Receipt")
+        .setStyle(ButtonStyle.Link)
+        .setURL(`https://discord.com/channels/${interaction.guild.id}/${receiptChannel.id}`)
+    );
 
-          return;
-          releaseSubmitLock(interaction.user.id);
-        }
+    await interaction.channel.send({
+      content: `✅ Order submitted. Your receipt channel is ready.\nThis private shopping channel will close in 20 seconds.`,
+      components: [continueRow],
+    });
+
+    const channelToDelete = trackedShopChannel || interaction.channel;
+
+    setTimeout(async () => {
+      try {
+        await channelToDelete.delete("Shop session completed");
+      } catch (err) {
+        console.error("Failed to delete shop session channel:", err);
       }
+    }, 20000);
+
+    return;
+  } finally {
+    clearSubmitLock(interaction.user.id);
+  }
+}
 
       if (customId.startsWith("staff_mark_paid:")) {
         const [, orderIdStr] = customId.split(":");
