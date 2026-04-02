@@ -2206,8 +2206,16 @@ client.on("interactionCreate", async (interaction) => {
 
         const { channel } = await sendOrEditCartUiMessage(interaction, payload, { keepReply: true });
 
+        const continueOrderRow = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setLabel("Continue Order")
+            .setStyle(ButtonStyle.Link)
+            .setURL(`https://discord.com/channels/${interaction.guild.id}/${channel.id}`)
+        );
+
         await interaction.editReply({
-          content: `✅ Details saved. Continue your order here: <#${channel.id}>`,
+          content: `✅ Details saved. Your private shop channel is ready.`,
+          components: [continueOrderRow],
         });
 
         setTimeout(async () => {
