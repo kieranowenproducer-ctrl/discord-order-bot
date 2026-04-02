@@ -2429,20 +2429,14 @@ client.on("interactionCreate", async (interaction) => {
 
 /* ------------------------------- STARTUP ------------------------------- */
 
+client.once("ready", () => {
+  console.log("✅ Logged in as", client.user.tag);
+  console.log("✅ Slash commands registered");
+});
+
 initDb()
   .then(() => registerCommands())
-  .then(() => {
-    client.once("ready", () => {
-      console.log("✅ Logged in as", client.user.tag);
-      console.log("✅ Slash commands registered");
-    });
-
-    return client.login(TOKEN);
-  })
-  .catch((err) => {
-    console.error("Startup error:", err);
-    process.exit(1);
-  });
+  .then(() => client.login(TOKEN))
   .catch((err) => {
     console.error("Startup error:", err);
     process.exit(1);
