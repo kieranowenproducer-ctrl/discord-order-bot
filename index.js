@@ -1645,7 +1645,7 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
-            if (customId === "cart_submit") {
+      if (customId === "cart_submit") {
         trackCartUiMessage(interaction.user.id, interaction.channel.id, interaction.message.id);
 
         if (isSubmitLocked(interaction.user.id)) {
@@ -2002,6 +2002,7 @@ client.on("interactionCreate", async (interaction) => {
 
         return;
       }
+    }
 
     if (interaction.isStringSelectMenu()) {
       const { customId } = interaction;
@@ -2438,6 +2439,10 @@ initDb()
 
     return client.login(TOKEN);
   })
+  .catch((err) => {
+    console.error("Startup error:", err);
+    process.exit(1);
+  });
   .catch((err) => {
     console.error("Startup error:", err);
     process.exit(1);
