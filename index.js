@@ -1058,18 +1058,7 @@ async function hasUserPlacedOrderBefore(userId) {
 }
 
 async function hasUserPendingOrder(userId) {
-  const res = await pool.query(
-    `
-    SELECT 1
-    FROM orders
-    WHERE user_id = $1
-      AND status IN ('pending', 'paid', 'dispatched')
-    LIMIT 1
-    `,
-    [userId]
-  );
-
-  return res.rows.length > 0;
+  return false;
 }
 
 async function getUserShippingProfile(userId) {
@@ -2624,17 +2613,6 @@ client.on("interactionCreate", async (interaction) => {
             components: cartActionsComponents(true),
           });
         }
-
-        setSubmitLock(interaction.user.id);
-
-        try {
-          const existingPendingOrder = await hasUserPendingOrder(interaction.user.id);
-          if (existingPendingOrder) {
-            return interaction.update({
-              content: "You already have an order awaiting completion. Please contact staff if needed.",
-              components: cartActionsComponents(),
-            });
-          }
 
           const cart = await getCartSummary(interaction.user.id);
           if (!cart.items.length) {
