@@ -778,7 +778,10 @@ async function registerCommands() {
 function menuMessageComponents() {
   return [
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId("open_menu").setLabel("Click to see our menu").setStyle(ButtonStyle.Primary)
+      new ButtonBuilder()
+        .setCustomId("open_menu")
+        .setLabel("Click to see our menu")
+        .setStyle(ButtonStyle.Primary)
     ),
   ];
 }
@@ -790,6 +793,16 @@ function categorySelectComponents() {
         .setCustomId("select_category")
         .setPlaceholder("Choose a category…")
         .addOptions(categoryOptions)
+    ),
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId("shop_view_cart")
+        .setLabel("View Basket")
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId("shop_close_session")
+        .setLabel("Close Shop")
+        .setStyle(ButtonStyle.Danger)
     ),
   ];
 }
@@ -814,6 +827,20 @@ async function itemSelectComponents(category) {
         .setPlaceholder("Choose an item…")
         .addOptions(options)
     ),
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId("browse_categories")
+        .setLabel("Back to Categories")
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId("shop_view_cart")
+        .setLabel("View Basket")
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId("shop_close_session")
+        .setLabel("Close Shop")
+        .setStyle(ButtonStyle.Danger)
+    ),
   ];
 }
 
@@ -831,26 +858,66 @@ async function qtyButtonsComponents(category, sku) {
     );
   }
 
-  const row1 = new ActionRowBuilder().addComponents(...quickButtons);
+  const rows = [];
 
-  const row2 = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`add_qty_other:${category}:${sku}`)
-      .setLabel("Other…")
-      .setStyle(ButtonStyle.Primary)
-      .setDisabled(stockQty <= 0)
+  if (quickButtons.length) {
+    rows.push(new ActionRowBuilder().addComponents(...quickButtons));
+  }
+
+  rows.push(
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`add_qty_other:${category}:${sku}`)
+        .setLabel("Other…")
+        .setStyle(ButtonStyle.Primary)
+        .setDisabled(stockQty <= 0),
+      new ButtonBuilder()
+        .setCustomId(`back_to_items:${category}`)
+        .setLabel("Back to Items")
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId("browse_categories")
+        .setLabel("Back to Categories")
+        .setStyle(ButtonStyle.Secondary)
+    )
   );
 
-  return [row1, row2];
+  rows.push(
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId("shop_view_cart")
+        .setLabel("View Basket")
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId("shop_close_session")
+        .setLabel("Close Shop")
+        .setStyle(ButtonStyle.Danger)
+    )
+  );
+
+  return rows;
 }
 
 function cartActionsComponents(disableSubmit = false) {
   return [
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId("cart_add_more").setLabel("Add Another Item").setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId("cart_discount").setLabel("Apply Discount Code").setStyle(ButtonStyle.Primary),
-      new ButtonBuilder().setCustomId("cart_submit").setLabel("Submit Order ✅").setStyle(ButtonStyle.Success).setDisabled(disableSubmit),
-      new ButtonBuilder().setCustomId("cart_clear").setLabel("Clear Cart").setStyle(ButtonStyle.Danger)
+      new ButtonBuilder()
+        .setCustomId("browse_categories")
+        .setLabel("Browse Categories")
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId("cart_discount")
+        .setLabel("Apply Discount Code")
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId("cart_submit")
+        .setLabel("Submit Order ✅")
+        .setStyle(ButtonStyle.Success)
+        .setDisabled(disableSubmit),
+      new ButtonBuilder()
+        .setCustomId("cart_clear")
+        .setLabel("Clear Cart")
+        .setStyle(ButtonStyle.Danger)
     ),
   ];
 }
@@ -1319,8 +1386,6 @@ function staffReceiptControls(orderId, status = "pending") {
 
 /* ------------------------------ INTERACTIONS ----------------------------- */
 
-/* ------------------------------ INTERACTIONS ----------------------------- */
-
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
   partials: [Partials.Channel],
@@ -1328,6 +1393,8 @@ const client = new Client({
 
 const CART_UI_MESSAGES = new Map();
 const SHOP_SESSION_CHANNELS = new Map();
+const SHOP_SESSION_TIMEOUTS = new Map();
+const SHOP_SESSION_TIMEOUT_MS = 5 * 60 * 1000;
 
 async function getTrackedCartUiMessage(userId, channel) {
   const tracked = CART_UI_MESSAGES.get(userId);
@@ -1372,9 +1439,46 @@ function clearTrackedShopSessionChannel(userId) {
   SHOP_SESSION_CHANNELS.delete(userId);
 }
 
+function clearShopSessionTimeout(userId) {
+  const timeout = SHOP_SESSION_TIMEOUTS.get(userId);
+  if (timeout) {
+    clearTimeout(timeout);
+    SHOP_SESSION_TIMEOUTS.delete(userId);
+  }
+}
+
+async function destroyShopSession(guild, userId, reason = "Shop session closed") {
+  clearShopSessionTimeout(userId);
+
+  const channel = await getTrackedShopSessionChannel(guild, userId).catch(() => null);
+
+  clearTrackedCartUiMessage(userId);
+  clearTrackedShopSessionChannel(userId);
+
+  await clearCart(userId).catch(() => {});
+  await clearCartDiscount(userId).catch(() => {});
+
+  if (channel) {
+    await channel.delete(reason).catch(() => {});
+  }
+}
+
+function resetShopSessionTimeout(guild, userId) {
+  clearShopSessionTimeout(userId);
+
+  const timeout = setTimeout(async () => {
+    await destroyShopSession(guild, userId, "Shop session expired after inactivity");
+  }, SHOP_SESSION_TIMEOUT_MS);
+
+  SHOP_SESSION_TIMEOUTS.set(userId, timeout);
+}
+
 async function createOrGetShopSessionChannel(guild, user) {
   const existingTracked = await getTrackedShopSessionChannel(guild, user.id);
-  if (existingTracked) return existingTracked;
+  if (existingTracked) {
+    resetShopSessionTimeout(guild, user.id);
+    return existingTracked;
+  }
 
   const topicMarker = `shop-session:${user.id}`;
   const cachedExisting = guild.channels.cache.find(
@@ -1383,8 +1487,10 @@ async function createOrGetShopSessionChannel(guild, user) {
       ch.type === ChannelType.GuildText &&
       ch.topic === topicMarker
   );
+
   if (cachedExisting) {
     trackShopSessionChannel(user.id, cachedExisting.id);
+    resetShopSessionTimeout(guild, user.id);
     return cachedExisting;
   }
 
@@ -1405,6 +1511,7 @@ async function createOrGetShopSessionChannel(guild, user) {
   });
 
   trackShopSessionChannel(user.id, channel.id);
+  resetShopSessionTimeout(guild, user.id);
   return channel;
 }
 
@@ -1425,12 +1532,48 @@ async function sendOrEditCartUiMessage(interaction, payload, options = {}) {
     trackCartUiMessage(interaction.user.id, targetChannel.id, msg.id);
   }
 
+  resetShopSessionTimeout(interaction.guild, interaction.user.id);
+
   if (keepReply) {
     return { message: msg, channel: targetChannel };
   }
 
   await interaction.deleteReply().catch(() => {});
   return { message: msg, channel: targetChannel };
+}
+
+async function showCategoriesInSession(interaction, content = "Choose a category:") {
+  trackCartUiMessage(interaction.user.id, interaction.channel.id, interaction.message.id);
+  resetShopSessionTimeout(interaction.guild, interaction.user.id);
+
+  return interaction.update({
+    content,
+    components: categorySelectComponents(),
+  });
+}
+
+async function showCartInSession(interaction, heading = "🛒 **Your basket**") {
+  trackCartUiMessage(interaction.user.id, interaction.channel.id, interaction.message.id);
+  resetShopSessionTimeout(interaction.guild, interaction.user.id);
+
+  const cart = await getCartSummary(interaction.user.id);
+
+  if (!cart.items.length) {
+    return interaction.update({
+      content:
+        "🗑️ **Basket empty**\n\n" +
+        "Your cart is empty.\n" +
+        "Choose a category below to start:",
+      components: categorySelectComponents(),
+    });
+  }
+
+  const content = await buildCartMessage(interaction.user.id, heading);
+
+  return interaction.update({
+    content,
+    components: cartActionsComponents(),
+  });
 }
 
 client.on("interactionCreate", async (interaction) => {
@@ -1453,13 +1596,13 @@ client.on("interactionCreate", async (interaction) => {
           `**How it works:**\n` +
           `1) Click the button below to get started\n` +
           `2) Enter your shipping details\n` +
-          `3) Browse categories and select items\n` +
+          `3) Browse categories and move back and forth freely\n` +
           `4) Add multiple items to your basket\n` +
           `5) Apply ${WELCOME_CODE} on your first order for 10% off products only\n` +
           `6) Submit your order when you're done\n\n` +
           `**Shipping:** UK Tracked £10 • Europe £35 • USA £45\n` +
           `**Cut-off:** 15:30 (Mon–Fri Dispatch)\n\n` +
-          `Browse our available products below. Stock updates live and staff support is available if needed.`;
+          `If a shopping session is abandoned, the temporary shop channel now auto closes after 5 minutes.`;
 
         await menuChannel.send({ content, components: menuMessageComponents() });
 
@@ -1507,6 +1650,21 @@ client.on("interactionCreate", async (interaction) => {
 
     if (interaction.isButton()) {
       const { customId } = interaction;
+
+      if (
+        customId === "browse_categories" ||
+        customId === "shop_view_cart" ||
+        customId === "shop_close_session" ||
+        customId === "cart_discount" ||
+        customId === "cart_clear" ||
+        customId === "cart_submit" ||
+        customId === "cart_add_more" ||
+        customId.startsWith("add_qty:") ||
+        customId.startsWith("add_qty_other:") ||
+        customId.startsWith("back_to_items:")
+      ) {
+        resetShopSessionTimeout(interaction.guild, interaction.user.id);
+      }
 
       if (customId === "open_menu") {
         await createOrGetShopSessionChannel(interaction.guild, interaction.user);
@@ -1656,6 +1814,39 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
+      if (customId === "browse_categories" || customId === "cart_add_more") {
+        return showCategoriesInSession(interaction, "Choose a category:");
+      }
+
+      if (customId === "shop_view_cart") {
+        return showCartInSession(interaction);
+      }
+
+      if (customId === "shop_close_session") {
+        await interaction.update({
+          content: "🗑️ Closing your shop session...",
+          components: [],
+        });
+
+        setTimeout(async () => {
+          await destroyShopSession(interaction.guild, interaction.user.id, "Shop session closed by user");
+        }, 1500);
+
+        return;
+      }
+
+      if (customId.startsWith("back_to_items:")) {
+        trackCartUiMessage(interaction.user.id, interaction.channel.id, interaction.message.id);
+
+        const [, category] = customId.split(":");
+        const itemComponents = await itemSelectComponents(category);
+
+        return interaction.update({
+          content: `Category selected: **${category}**\nNow choose an item:`,
+          components: itemComponents,
+        });
+      }
+
       if (customId.startsWith("add_qty:")) {
         trackCartUiMessage(interaction.user.id, interaction.channel.id, interaction.message.id);
 
@@ -1701,14 +1892,6 @@ client.on("interactionCreate", async (interaction) => {
         return interaction.showModal(qtyOtherModal(category, sku));
       }
 
-      if (customId === "cart_add_more") {
-        trackCartUiMessage(interaction.user.id, interaction.channel.id, interaction.message.id);
-        return interaction.update({
-          content: "Choose a category:",
-          components: categorySelectComponents(),
-        });
-      }
-
       if (customId === "cart_discount") {
         trackCartUiMessage(interaction.user.id, interaction.channel.id, interaction.message.id);
 
@@ -1718,7 +1901,7 @@ client.on("interactionCreate", async (interaction) => {
             content:
               "🗑️ **Basket empty**\n\n" +
               "Your cart is empty.\n" +
-              "Choose a category below to start a new order:",
+              "Choose a category below to start:",
             components: categorySelectComponents(),
           });
         }
@@ -1730,14 +1913,18 @@ client.on("interactionCreate", async (interaction) => {
         trackCartUiMessage(interaction.user.id, interaction.channel.id, interaction.message.id);
 
         await clearCart(interaction.user.id);
+        await clearCartDiscount(interaction.user.id);
 
-        return interaction.update({
-          content:
-            "🗑️ **Basket empty**\n\n" +
-            "Your cart has been cleared.\n" +
-            "Choose a category below to start a new order:",
-          components: categorySelectComponents(),
+        await interaction.update({
+          content: "🗑️ Your cart has been cleared. This shop channel will now close.",
+          components: [],
         });
+
+        setTimeout(async () => {
+          await destroyShopSession(interaction.guild, interaction.user.id, "Cart cleared and shop closed");
+        }, 1500);
+
+        return;
       }
 
       if (customId === "cart_submit") {
@@ -1767,7 +1954,7 @@ client.on("interactionCreate", async (interaction) => {
               content:
                 "🗑️ **Basket empty**\n\n" +
                 "Your cart is empty.\n" +
-                "Choose a category below to start a new order:",
+                "Choose a category below to start:",
               components: categorySelectComponents(),
             });
           }
@@ -1893,38 +2080,14 @@ client.on("interactionCreate", async (interaction) => {
             components: staffReceiptControls(orderId, "pending"),
           });
 
-          const trackedCartMessage = await getTrackedCartUiMessage(interaction.user.id, interaction.channel);
-          const trackedShopChannel = await getTrackedShopSessionChannel(interaction.guild, interaction.user.id);
-
-          clearTrackedCartUiMessage(interaction.user.id);
-          clearTrackedShopSessionChannel(interaction.user.id);
-          await clearCart(interaction.user.id);
-
-          if (trackedCartMessage) {
-            await trackedCartMessage.delete().catch(() => {});
-          }
-
-          const continueRow = new ActionRowBuilder().addComponents(
-            new ButtonBuilder()
-              .setLabel("Continue to Receipt")
-              .setStyle(ButtonStyle.Link)
-              .setURL(`https://discord.com/channels/${interaction.guild.id}/${receiptChannel.id}`)
-          );
-
-          await interaction.channel.send({
-            content: `✅ Order submitted. Your receipt channel is ready.\nThis private shopping channel will close in 20 seconds.`,
-            components: [continueRow],
+          await interaction.update({
+            content: `✅ Order submitted successfully.\nYour receipt channel is ready: <#${receiptChannel.id}>`,
+            components: [],
           });
 
-          const channelToDelete = trackedShopChannel || interaction.channel;
-
           setTimeout(async () => {
-            try {
-              await channelToDelete.delete("Shop session completed");
-            } catch (err) {
-              console.error("Failed to delete shop session channel:", err);
-            }
-          }, 20000);
+            await destroyShopSession(interaction.guild, interaction.user.id, "Shop session completed");
+          }, 2000);
 
           return;
         } finally {
@@ -2123,6 +2286,13 @@ client.on("interactionCreate", async (interaction) => {
     if (interaction.isStringSelectMenu()) {
       const { customId } = interaction;
 
+      if (
+        customId === "select_category" ||
+        customId.startsWith("select_item:")
+      ) {
+        resetShopSessionTimeout(interaction.guild, interaction.user.id);
+      }
+
       if (customId === "staff_stock_select_category") {
         if (!isStaff(interaction.member)) {
           return interaction.reply({ content: "Staff only.", ephemeral: true });
@@ -2160,7 +2330,7 @@ client.on("interactionCreate", async (interaction) => {
         const itemComponents = await itemSelectComponents(category);
 
         return interaction.update({
-          content: "Now choose an item:",
+          content: `Category selected: **${category}**\nNow choose an item:`,
           components: itemComponents,
         });
       }
@@ -2175,7 +2345,7 @@ client.on("interactionCreate", async (interaction) => {
         if (stockQty <= 0) {
           return interaction.update({
             content: "That item is out of stock.",
-            components: categorySelectComponents(),
+            components: await itemSelectComponents(category),
           });
         }
 
@@ -2190,6 +2360,14 @@ client.on("interactionCreate", async (interaction) => {
 
     if (interaction.isModalSubmit()) {
       const { customId } = interaction;
+
+      if (
+        customId === "shipping_modal" ||
+        customId === "discount_code_modal" ||
+        customId.startsWith("qty_other_modal:")
+      ) {
+        resetShopSessionTimeout(interaction.guild, interaction.user.id);
+      }
 
       if (customId === "shipping_modal") {
         const full_name = interaction.fields.getTextInputValue("full_name")?.trim();
@@ -2219,7 +2397,7 @@ client.on("interactionCreate", async (interaction) => {
         );
 
         await interaction.editReply({
-          content: `✅ Details saved. Your private shop channel is ready.`,
+          content: `✅ Details saved. Your shop channel is ready.\nIt will auto close after 5 minutes of inactivity.`,
           components: [continueOrderRow],
         });
 
@@ -2574,6 +2752,10 @@ client.once("ready", () => {
 initDb()
   .then(() => registerCommands())
   .then(() => client.login(TOKEN))
+  .catch((err) => {
+    console.error("Startup error:", err);
+    process.exit(1);
+  });
   .catch((err) => {
     console.error("Startup error:", err);
     process.exit(1);
