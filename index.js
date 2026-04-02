@@ -1,11 +1,13 @@
 // index.js
 // Discord Shop Bot (discord.js v14 + Postgres)
+// Features:
 // - shop
-// - Verification system
-// - Stock control
-// - Duplicate order protection
-// - Mark as dispatched
-// - Staff admin panel
+// - verification system
+// - stock control
+// - duplicate order protection
+// - mark as dispatched
+// - staff admin panel
+// - database driven categories and products
 
 const {
   Client,
@@ -44,7 +46,7 @@ const VERIFICATION_LOG_CHANNEL_ID = process.env.VERIFICATION_LOG_CHANNEL_ID;
 const VERIFIED_ROLE_ID = process.env.VERIFIED_ROLE_ID;
 const STAFF_ONLY_CHANNEL_ID = process.env.STAFF_ONLY_CHANNEL_ID;
 
-// Bank details via env vars so you don't hardcode in GitHub
+// Bank details via env vars
 const BANK_ACCOUNT_NAME = process.env.BANK_ACCOUNT_NAME || "YOUR COMPANY LTD";
 const BANK_SORT_CODE = process.env.BANK_SORT_CODE || "00-00-00";
 const BANK_ACCOUNT_NUMBER = process.env.BANK_ACCOUNT_NUMBER || "00000000";
@@ -76,11 +78,11 @@ requireEnv("VERIFICATION_LOG_CHANNEL_ID", VERIFICATION_LOG_CHANNEL_ID);
 requireEnv("VERIFIED_ROLE_ID", VERIFIED_ROLE_ID);
 requireEnv("STAFF_ONLY_CHANNEL_ID", STAFF_ONLY_CHANNEL_ID);
 
-/* ----------------------------- SHOP CATALOG ----------------------------- */
+/* --------------------- LEGACY CATALOG FOR INITIAL SEED -------------------- */
 
-const CATALOG = {
+const LEGACY_CATALOG = {
   "cat 1": [
-    { sku: "A01", name: "uuu", price_pence: 14000, stock_qty: 10  },
+    { sku: "A01", name: "uuu", price_pence: 14000, stock_qty: 10 },
     { sku: "A02", name: "ttt", price_pence: 12000, stock_qty: 10 },
     { sku: "A03", name: "sss", price_pence: 14000, stock_qty: 10 },
     { sku: "A04", name: "rrr", price_pence: 11000, stock_qty: 10 },
@@ -93,7 +95,7 @@ const CATALOG = {
     { sku: "A11", name: "kkk", price_pence: 10000, stock_qty: 10 },
     { sku: "A12", name: "jjj", price_pence: 7000, stock_qty: 10 },
     { sku: "A13", name: "iii", price_pence: 7000, stock_qty: 10 },
-    { sku: "A14", name: "hhh", price_pence: 6000, stock_qty: 10  },
+    { sku: "A14", name: "hhh", price_pence: 6000, stock_qty: 10 },
     { sku: "A15", name: "ggg", price_pence: 8500, stock_qty: 10 },
     { sku: "A16", name: "fff", price_pence: 14000, stock_qty: 10 },
     { sku: "A17", name: "eee", price_pence: 5000, stock_qty: 10 },
@@ -116,42 +118,42 @@ const CATALOG = {
     { sku: "D03", name: "tt", price_pence: 6500, stock_qty: 10 },
   ],
   "cat 5": [
-    { sku: "E01", name: "ss", price_pence: 14000, stock_qty: 10, sizes: ["Standard"], colors: ["Default"] },
-    { sku: "E02", name: "rr", price_pence: 11500, stock_qty: 10, sizes: ["Standard"], colors: ["Default"] },
-    { sku: "E03", name: "qq", price_pence: 13000, stock_qty: 10, sizes: ["Standard"], colors: ["Default"] },
-    { sku: "E04", name: "pp", price_pence: 5000, stock_qty: 10, sizes: ["Standard"], colors: ["Default"] },
-    { sku: "E05", name: "oo", price_pence: 9000, stock_qty: 10, sizes: ["Standard"], colors: ["Default"] },
-    { sku: "E06", name: "nn", price_pence: 3500, stock_qty: 10, sizes: ["Standard"], colors: ["Default"] },
-    { sku: "E07", name: "mm", price_pence: 3000, stock_qty: 10, sizes: ["Standard"], colors: ["Default"] },
-    { sku: "E08", name: "ll", price_pence: 3500, stock_qty: 10, sizes: ["Standard"], colors: ["Default"] },
+    { sku: "E01", name: "ss", price_pence: 14000, stock_qty: 10, default_size: "Standard", default_color: "Default" },
+    { sku: "E02", name: "rr", price_pence: 11500, stock_qty: 10, default_size: "Standard", default_color: "Default" },
+    { sku: "E03", name: "qq", price_pence: 13000, stock_qty: 10, default_size: "Standard", default_color: "Default" },
+    { sku: "E04", name: "pp", price_pence: 5000, stock_qty: 10, default_size: "Standard", default_color: "Default" },
+    { sku: "E05", name: "oo", price_pence: 9000, stock_qty: 10, default_size: "Standard", default_color: "Default" },
+    { sku: "E06", name: "nn", price_pence: 3500, stock_qty: 10, default_size: "Standard", default_color: "Default" },
+    { sku: "E07", name: "mm", price_pence: 3000, stock_qty: 10, default_size: "Standard", default_color: "Default" },
+    { sku: "E08", name: "ll", price_pence: 3500, stock_qty: 10, default_size: "Standard", default_color: "Default" },
   ],
   "cat 6": [
-    { sku: "F01", name: "kk", price_pence: 1500, stock_qty: 10, sizes: ["Standard"], colors: ["Default"] },
-    { sku: "F02", name: "jj", price_pence: 4000, stock_qty: 10, sizes: ["Standard"], colors: ["Default"] },
-    { sku: "F03", name: "ii", price_pence: 1000, stock_qty: 10, sizes: ["Standard"], colors: ["Default"] },
-    { sku: "F04", name: "hh", price_pence: 2500, stock_qty: 10, sizes: ["Standard"], colors: ["Default"] },
-    { sku: "F05", name: "gg", price_pence: 5000, stock_qty: 10, sizes: ["Standard"], colors: ["Default"] },
-    { sku: "F06", name: "ff", price_pence: 6000, stock_qty: 10, sizes: ["Standard"], colors: ["Default"] },
-    { sku: "F07", name: "ee", price_pence: 6000, stock_qty: 10, sizes: ["Standard"], colors: ["Default"] },
+    { sku: "F01", name: "kk", price_pence: 1500, stock_qty: 10, default_size: "Standard", default_color: "Default" },
+    { sku: "F02", name: "jj", price_pence: 4000, stock_qty: 10, default_size: "Standard", default_color: "Default" },
+    { sku: "F03", name: "ii", price_pence: 1000, stock_qty: 10, default_size: "Standard", default_color: "Default" },
+    { sku: "F04", name: "hh", price_pence: 2500, stock_qty: 10, default_size: "Standard", default_color: "Default" },
+    { sku: "F05", name: "gg", price_pence: 5000, stock_qty: 10, default_size: "Standard", default_color: "Default" },
+    { sku: "F06", name: "ff", price_pence: 6000, stock_qty: 10, default_size: "Standard", default_color: "Default" },
+    { sku: "F07", name: "ee", price_pence: 6000, stock_qty: 10, default_size: "Standard", default_color: "Default" },
   ],
   "cat 7": [
-    { sku: "G01", name: "dd", price_pence: 4500, stock_qty: 10, sizes: ["Standard"], colors: ["Default"] },
-    { sku: "G02", name: "cc", price_pence: 6500, stock_qty: 10, sizes: ["Standard"], colors: ["Default"] },
-    { sku: "G03", name: "bb", price_pence: 5500, stock_qty: 10, sizes: ["Standard"], colors: ["Default"] },
-    { sku: "G04", name: "aa", price_pence: 4500, stock_qty: 10, sizes: ["Standard"], colors: ["Default"] },
-    { sku: "G05", name: "z", price_pence: 2500, stock_qty: 10, sizes: ["Standard"], colors: ["Default"] },
-    { sku: "G06", name: "y", price_pence: 2500, stock_qty: 10, sizes: ["Standard"], colors: ["Default"] },
-    { sku: "G07", name: "x", price_pence: 2000, stock_qty: 10, sizes: ["Standard"], colors: ["Default"] },
+    { sku: "G01", name: "dd", price_pence: 4500, stock_qty: 10, default_size: "Standard", default_color: "Default" },
+    { sku: "G02", name: "cc", price_pence: 6500, stock_qty: 10, default_size: "Standard", default_color: "Default" },
+    { sku: "G03", name: "bb", price_pence: 5500, stock_qty: 10, default_size: "Standard", default_color: "Default" },
+    { sku: "G04", name: "aa", price_pence: 4500, stock_qty: 10, default_size: "Standard", default_color: "Default" },
+    { sku: "G05", name: "z", price_pence: 2500, stock_qty: 10, default_size: "Standard", default_color: "Default" },
+    { sku: "G06", name: "y", price_pence: 2500, stock_qty: 10, default_size: "Standard", default_color: "Default" },
+    { sku: "G07", name: "x", price_pence: 2000, stock_qty: 10, default_size: "Standard", default_color: "Default" },
   ],
   "cat 8": [
-    { sku: "H01", name: "w", price_pence: 3500, stock_qty: 10, sizes: ["Standard"], colors: ["Default"] },
-    { sku: "H02", name: "v", price_pence: 3000, stock_qty: 10, sizes: ["Standard"], colors: ["Default"] },
-    { sku: "H03", name: "u", price_pence: 3000, stock_qty: 10, sizes: ["Standard"], colors: ["Default"] },
-    { sku: "H04", name: "t", price_pence: 2500, stock_qty: 10, sizes: ["Standard"], colors: ["Default"] },
-    { sku: "H05", name: "s", price_pence: 3000, stock_qty: 10, sizes: ["Standard"], colors: ["Default"] },
-    { sku: "H06", name: "r", price_pence: 3500, stock_qty: 10, sizes: ["Standard"], colors: ["Default"] },
-    { sku: "H07", name: "q", price_pence: 3500, stock_qty: 10, sizes: ["Standard"], colors: ["Default"] },
-    { sku: "H08", name: "p", price_pence: 3500, stock_qty: 10, sizes: ["Standard"], colors: ["Default"] },
+    { sku: "H01", name: "w", price_pence: 3500, stock_qty: 10, default_size: "Standard", default_color: "Default" },
+    { sku: "H02", name: "v", price_pence: 3000, stock_qty: 10, default_size: "Standard", default_color: "Default" },
+    { sku: "H03", name: "u", price_pence: 3000, stock_qty: 10, default_size: "Standard", default_color: "Default" },
+    { sku: "H04", name: "t", price_pence: 2500, stock_qty: 10, default_size: "Standard", default_color: "Default" },
+    { sku: "H05", name: "s", price_pence: 3000, stock_qty: 10, default_size: "Standard", default_color: "Default" },
+    { sku: "H06", name: "r", price_pence: 3500, stock_qty: 10, default_size: "Standard", default_color: "Default" },
+    { sku: "H07", name: "q", price_pence: 3500, stock_qty: 10, default_size: "Standard", default_color: "Default" },
+    { sku: "H08", name: "p", price_pence: 3500, stock_qty: 10, default_size: "Standard", default_color: "Default" },
   ],
   "cat 9": [
     { sku: "I01", name: "o", price_pence: 1000, stock_qty: 10 },
@@ -175,8 +177,6 @@ const CATALOG = {
     { sku: "K06", name: "a", price_pence: 2000, stock_qty: 10 },
   ],
 };
-
-const categoryOptions = Object.keys(CATALOG).map((cat) => ({ label: cat, value: cat }));
 
 /* ----------------------------- DATABASE SETUP ---------------------------- */
 
@@ -213,9 +213,6 @@ async function initDb() {
     );
   `);
 
-  await pool.query(`ALTER TABLE IF EXISTS user_profiles ADD COLUMN IF NOT EXISTS email TEXT;`);
-  await pool.query(`ALTER TABLE IF EXISTS user_profiles ADD COLUMN IF NOT EXISTS phone TEXT;`);
-
   await pool.query(`
     CREATE TABLE IF NOT EXISTS shipping_profiles (
       user_id TEXT PRIMARY KEY REFERENCES user_profiles(user_id) ON DELETE CASCADE,
@@ -224,9 +221,6 @@ async function initDb() {
       updated_at TIMESTAMPTZ DEFAULT NOW()
     );
   `);
-
-  await pool.query(`ALTER TABLE IF EXISTS shipping_profiles ADD COLUMN IF NOT EXISTS full_address TEXT;`);
-  await pool.query(`ALTER TABLE IF EXISTS shipping_profiles ADD COLUMN IF NOT EXISTS country TEXT;`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS carts (
@@ -239,13 +233,11 @@ async function initDb() {
     );
   `);
 
-  await pool.query(`ALTER TABLE IF EXISTS carts ADD COLUMN IF NOT EXISTS discount_code TEXT;`);
-  await pool.query(`ALTER TABLE IF EXISTS carts ADD COLUMN IF NOT EXISTS discount_percent INT NOT NULL DEFAULT 0;`);
-
   await pool.query(`
     CREATE TABLE IF NOT EXISTS cart_items (
       id BIGSERIAL PRIMARY KEY,
       cart_id BIGINT NOT NULL REFERENCES carts(cart_id) ON DELETE CASCADE,
+      product_id BIGINT,
       sku TEXT NOT NULL,
       name TEXT NOT NULL,
       size TEXT NOT NULL,
@@ -254,6 +246,8 @@ async function initDb() {
       price_pence INT NOT NULL CHECK (price_pence >= 0)
     );
   `);
+
+  await pool.query(`ALTER TABLE IF EXISTS cart_items ADD COLUMN IF NOT EXISTS product_id BIGINT;`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS orders (
@@ -277,19 +271,11 @@ async function initDb() {
     );
   `);
 
-  await pool.query(`ALTER TABLE IF EXISTS orders ADD COLUMN IF NOT EXISTS email TEXT;`);
-  await pool.query(`ALTER TABLE IF EXISTS orders ADD COLUMN IF NOT EXISTS phone TEXT;`);
-  await pool.query(`ALTER TABLE IF EXISTS orders ADD COLUMN IF NOT EXISTS full_address TEXT;`);
-  await pool.query(`ALTER TABLE IF EXISTS orders ADD COLUMN IF NOT EXISTS country TEXT;`);
-  await pool.query(`ALTER TABLE IF EXISTS orders ADD COLUMN IF NOT EXISTS shipping_pence INT;`);
-  await pool.query(`ALTER TABLE IF EXISTS orders ADD COLUMN IF NOT EXISTS discount_code TEXT;`);
-  await pool.query(`ALTER TABLE IF EXISTS orders ADD COLUMN IF NOT EXISTS discount_percent INT NOT NULL DEFAULT 0;`);
-  await pool.query(`ALTER TABLE IF EXISTS orders ADD COLUMN IF NOT EXISTS discount_amount_pence INT NOT NULL DEFAULT 0;`);
-
   await pool.query(`
     CREATE TABLE IF NOT EXISTS order_items (
       id BIGSERIAL PRIMARY KEY,
       order_id BIGINT NOT NULL REFERENCES orders(order_id) ON DELETE CASCADE,
+      product_id BIGINT,
       sku TEXT NOT NULL,
       name TEXT NOT NULL,
       size TEXT NOT NULL,
@@ -299,14 +285,7 @@ async function initDb() {
     );
   `);
 
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS stock_items (
-      sku TEXT PRIMARY KEY,
-      item_name TEXT NOT NULL,
-      stock_qty INT NOT NULL DEFAULT 0,
-      updated_at TIMESTAMPTZ DEFAULT NOW()
-    );
-  `);
+  await pool.query(`ALTER TABLE IF EXISTS order_items ADD COLUMN IF NOT EXISTS product_id BIGINT;`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS discount_codes (
@@ -318,12 +297,6 @@ async function initDb() {
       updated_at TIMESTAMPTZ DEFAULT NOW()
     );
   `);
-
-  await pool.query(`ALTER TABLE IF EXISTS discount_codes ADD COLUMN IF NOT EXISTS discount_percent INT NOT NULL DEFAULT 0;`);
-  await pool.query(`ALTER TABLE IF EXISTS discount_codes ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;`);
-  await pool.query(`ALTER TABLE IF EXISTS discount_codes ADD COLUMN IF NOT EXISTS one_use_per_user BOOLEAN NOT NULL DEFAULT TRUE;`);
-  await pool.query(`ALTER TABLE IF EXISTS discount_codes ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();`);
-  await pool.query(`ALTER TABLE IF EXISTS discount_codes ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS discount_code_uses (
@@ -337,20 +310,81 @@ async function initDb() {
   `);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS shop_categories (
+      category_id BIGSERIAL PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      sort_order INT NOT NULL DEFAULT 0,
+      is_active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS shop_products (
+      product_id BIGSERIAL PRIMARY KEY,
+      category_id BIGINT NOT NULL REFERENCES shop_categories(category_id) ON DELETE RESTRICT,
+      sku TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL,
+      price_pence INT NOT NULL CHECK (price_pence >= 0),
+      stock_qty INT NOT NULL DEFAULT 0 CHECK (stock_qty >= 0),
+      default_size TEXT NOT NULL DEFAULT 'Standard',
+      default_color TEXT NOT NULL DEFAULT 'Standard',
+      is_active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(
+    `
     INSERT INTO discount_codes (code, discount_percent, is_active, one_use_per_user, created_at, updated_at)
     VALUES ($1, $2, TRUE, TRUE, NOW(), NOW())
     ON CONFLICT (code) DO NOTHING
-  `, [String(WELCOME_CODE || "").toUpperCase(), Number(WELCOME_DISCOUNT_PERCENT || 0)]);
+    `,
+    [String(WELCOME_CODE).toUpperCase(), Number(WELCOME_DISCOUNT_PERCENT || 0)]
+  );
 
-  for (const category of Object.keys(CATALOG)) {
-    for (const item of CATALOG[category]) {
+  await seedCatalogIfNeeded();
+}
+
+async function seedCatalogIfNeeded() {
+  const existingProducts = await pool.query(`SELECT COUNT(*)::int AS count FROM shop_products`);
+  if (Number(existingProducts.rows[0]?.count || 0) > 0) return;
+
+  let sortOrder = 1;
+
+  for (const [categoryName, items] of Object.entries(LEGACY_CATALOG)) {
+    const catRes = await pool.query(
+      `
+      INSERT INTO shop_categories (name, sort_order, is_active, created_at, updated_at)
+      VALUES ($1, $2, TRUE, NOW(), NOW())
+      RETURNING category_id
+      `,
+      [categoryName, sortOrder]
+    );
+
+    const categoryId = catRes.rows[0].category_id;
+    sortOrder += 1;
+
+    for (const item of items) {
       await pool.query(
         `
-        INSERT INTO stock_items (sku, item_name, stock_qty, updated_at)
-        VALUES ($1, $2, $3, NOW())
-        ON CONFLICT (sku) DO NOTHING
+        INSERT INTO shop_products (
+          category_id, sku, name, price_pence, stock_qty,
+          default_size, default_color, is_active, created_at, updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, TRUE, NOW(), NOW())
         `,
-        [item.sku, item.name, item.stock_qty]
+        [
+          categoryId,
+          item.sku,
+          item.name,
+          item.price_pence,
+          item.stock_qty,
+          item.default_size || DEFAULT_SIZE,
+          item.default_color || DEFAULT_COLOR,
+        ]
       );
     }
   }
@@ -359,7 +393,7 @@ async function initDb() {
 /* ------------------------------ HELPERS ------------------------------ */
 
 function money(pence) {
-  return `£${(pence / 100).toFixed(2)}`;
+  return `£${(Number(pence || 0) / 100).toFixed(2)}`;
 }
 
 function isStaff(member) {
@@ -371,7 +405,7 @@ function isStaffChannel(interaction) {
 }
 
 function safeChannelName(str) {
-  return str
+  return String(str || "")
     .toLowerCase()
     .replace(/[^a-z0-9-]/g, "-")
     .replace(/-+/g, "-")
@@ -381,8 +415,8 @@ function safeChannelName(str) {
 
 function calculateDiscountedTotals(subtotal, shipping, discountPercent) {
   const safePercent = Math.max(0, Math.min(100, Number(discountPercent || 0)));
-  const discountAmount = Math.round(subtotal * (safePercent / 100));
-  const total = subtotal - discountAmount + shipping;
+  const discountAmount = Math.round(Number(subtotal || 0) * (safePercent / 100));
+  const total = Number(subtotal || 0) - discountAmount + Number(shipping || 0);
 
   return {
     discountPercent: safePercent,
@@ -395,6 +429,18 @@ function normalizeDiscountCode(code) {
   return String(code || "").trim().toUpperCase();
 }
 
+function normalizeSku(code) {
+  return String(code || "").trim().toUpperCase();
+}
+
+function chunkOptions(options, size = 25) {
+  const chunks = [];
+  for (let i = 0; i < options.length; i += size) {
+    chunks.push(options.slice(i, i + size));
+  }
+  return chunks;
+}
+
 async function createDiscountCodeRecord(code, discountPercent) {
   const normalized = normalizeDiscountCode(code);
   const percent = Math.max(0, Math.min(100, Number(discountPercent || 0)));
@@ -405,6 +451,7 @@ async function createDiscountCodeRecord(code, discountPercent) {
     VALUES ($1, $2, TRUE, TRUE, NOW(), NOW())
     ON CONFLICT (code) DO UPDATE
     SET discount_percent = EXCLUDED.discount_percent,
+        is_active = TRUE,
         updated_at = NOW()
     `,
     [normalized, percent]
@@ -438,7 +485,7 @@ async function setDiscountCodeActiveState(code, isActive) {
     WHERE code = $1
     RETURNING code, discount_percent, is_active, one_use_per_user
     `,
-    [normalized, isActive]
+    [normalized, !!isActive]
   );
 
   return res.rows[0] || null;
@@ -460,21 +507,9 @@ async function hasUserUsedDiscountCode(userId, code) {
   return res.rows.length > 0;
 }
 
-async function recordDiscountCodeUse(userId, code, orderId) {
-  const normalized = normalizeDiscountCode(code);
-
-  await pool.query(
-    `
-    INSERT INTO discount_code_uses (code, user_id, order_id, used_at)
-    VALUES ($1, $2, $3, NOW())
-    ON CONFLICT (code, user_id) DO NOTHING
-    `,
-    [normalized, userId, orderId]
-  );
-}
-
 async function validateDiscountCodeForUser(userId, code) {
   const normalized = normalizeDiscountCode(code);
+
   if (!normalized) {
     return { valid: false, reason: "Please enter a code." };
   }
@@ -513,22 +548,341 @@ async function validateDiscountCodeForUser(userId, code) {
   };
 }
 
-async function getStockForSku(sku) {
-  const res = await pool.query(`SELECT stock_qty FROM stock_items WHERE sku=$1`, [sku]);
-  if (!res.rows.length) return 0;
-  return Number(res.rows[0].stock_qty || 0);
+async function getActiveCategories() {
+  const res = await pool.query(
+    `
+    SELECT category_id, name, sort_order
+    FROM shop_categories
+    WHERE is_active = TRUE
+    ORDER BY sort_order ASC, name ASC
+    `
+  );
+
+  return res.rows;
 }
 
-async function getCartQtyForSku(userId, sku) {
+async function getAllCategoriesForStaff() {
+  const res = await pool.query(
+    `
+    SELECT category_id, name, sort_order, is_active
+    FROM shop_categories
+    ORDER BY is_active DESC, sort_order ASC, name ASC
+    `
+  );
+
+  return res.rows;
+}
+
+async function getCategoryById(categoryId) {
+  const res = await pool.query(
+    `
+    SELECT category_id, name, sort_order, is_active
+    FROM shop_categories
+    WHERE category_id = $1
+    `,
+    [categoryId]
+  );
+
+  return res.rows[0] || null;
+}
+
+async function createCategory(name) {
+  const safeName = String(name || "").trim();
+  if (!safeName) throw new Error("Category name is required.");
+
+  const maxRes = await pool.query(`SELECT COALESCE(MAX(sort_order), 0)::int AS max_sort FROM shop_categories`);
+  const nextSort = Number(maxRes.rows[0]?.max_sort || 0) + 1;
+
+  const res = await pool.query(
+    `
+    INSERT INTO shop_categories (name, sort_order, is_active, created_at, updated_at)
+    VALUES ($1, $2, TRUE, NOW(), NOW())
+    RETURNING category_id, name
+    `,
+    [safeName, nextSort]
+  );
+
+  return res.rows[0];
+}
+
+async function renameCategory(categoryId, newName) {
+  const safeName = String(newName || "").trim();
+  if (!safeName) throw new Error("New category name is required.");
+
+  const res = await pool.query(
+    `
+    UPDATE shop_categories
+    SET name = $2,
+        updated_at = NOW()
+    WHERE category_id = $1
+    RETURNING category_id, name
+    `,
+    [categoryId, safeName]
+  );
+
+  return res.rows[0] || null;
+}
+
+async function archiveCategory(categoryId) {
+  const activeProductsRes = await pool.query(
+    `
+    SELECT COUNT(*)::int AS count
+    FROM shop_products
+    WHERE category_id = $1 AND is_active = TRUE
+    `,
+    [categoryId]
+  );
+
+  const activeCount = Number(activeProductsRes.rows[0]?.count || 0);
+  if (activeCount > 0) {
+    throw new Error("Cannot archive a category while it still has active products. Archive the products first.");
+  }
+
+  const res = await pool.query(
+    `
+    UPDATE shop_categories
+    SET is_active = FALSE,
+        updated_at = NOW()
+    WHERE category_id = $1
+    RETURNING category_id, name
+    `,
+    [categoryId]
+  );
+
+  return res.rows[0] || null;
+}
+
+async function getActiveProductsByCategoryId(categoryId) {
+  const res = await pool.query(
+    `
+    SELECT
+      p.product_id,
+      p.category_id,
+      p.sku,
+      p.name,
+      p.price_pence,
+      p.stock_qty,
+      p.default_size,
+      p.default_color,
+      p.is_active,
+      c.name AS category_name
+    FROM shop_products p
+    JOIN shop_categories c ON c.category_id = p.category_id
+    WHERE p.category_id = $1
+      AND p.is_active = TRUE
+      AND c.is_active = TRUE
+    ORDER BY p.name ASC, p.sku ASC
+    `,
+    [categoryId]
+  );
+
+  return res.rows;
+}
+
+async function getAllActiveProductsForStaff() {
+  const res = await pool.query(
+    `
+    SELECT
+      p.product_id,
+      p.category_id,
+      p.sku,
+      p.name,
+      p.price_pence,
+      p.stock_qty,
+      p.default_size,
+      p.default_color,
+      p.is_active,
+      c.name AS category_name
+    FROM shop_products p
+    JOIN shop_categories c ON c.category_id = p.category_id
+    WHERE p.is_active = TRUE
+      AND c.is_active = TRUE
+    ORDER BY c.sort_order ASC, c.name ASC, p.name ASC, p.sku ASC
+    `
+  );
+
+  return res.rows;
+}
+
+async function getProductById(productId) {
+  const res = await pool.query(
+    `
+    SELECT
+      p.product_id,
+      p.category_id,
+      p.sku,
+      p.name,
+      p.price_pence,
+      p.stock_qty,
+      p.default_size,
+      p.default_color,
+      p.is_active,
+      c.name AS category_name
+    FROM shop_products p
+    JOIN shop_categories c ON c.category_id = p.category_id
+    WHERE p.product_id = $1
+    `,
+    [productId]
+  );
+
+  return res.rows[0] || null;
+}
+
+async function getProductBySku(sku) {
+  const safeSku = normalizeSku(sku);
+
+  const res = await pool.query(
+    `
+    SELECT
+      p.product_id,
+      p.category_id,
+      p.sku,
+      p.name,
+      p.price_pence,
+      p.stock_qty,
+      p.default_size,
+      p.default_color,
+      p.is_active,
+      c.name AS category_name
+    FROM shop_products p
+    JOIN shop_categories c ON c.category_id = p.category_id
+    WHERE p.sku = $1
+    `,
+    [safeSku]
+  );
+
+  return res.rows[0] || null;
+}
+
+async function createProduct({
+  categoryId,
+  sku,
+  name,
+  pricePence,
+  stockQty,
+  defaultSize,
+  defaultColor,
+}) {
+  const safeSku = normalizeSku(sku);
+  const safeName = String(name || "").trim();
+  const safePrice = Number(pricePence || 0);
+  const safeStock = Number(stockQty || 0);
+
+  if (!categoryId) throw new Error("Category is required.");
+  if (!safeSku) throw new Error("SKU is required.");
+  if (!safeName) throw new Error("Product name is required.");
+  if (!Number.isFinite(safePrice) || safePrice < 0) throw new Error("Price must be 0 or more.");
+  if (!Number.isFinite(safeStock) || safeStock < 0) throw new Error("Stock must be 0 or more.");
+
+  const res = await pool.query(
+    `
+    INSERT INTO shop_products (
+      category_id, sku, name, price_pence, stock_qty,
+      default_size, default_color, is_active, created_at, updated_at
+    )
+    VALUES ($1, $2, $3, $4, $5, $6, $7, TRUE, NOW(), NOW())
+    RETURNING product_id, sku, name
+    `,
+    [
+      categoryId,
+      safeSku,
+      safeName,
+      safePrice,
+      safeStock,
+      String(defaultSize || DEFAULT_SIZE).trim() || DEFAULT_SIZE,
+      String(defaultColor || DEFAULT_COLOR).trim() || DEFAULT_COLOR,
+    ]
+  );
+
+  return res.rows[0];
+}
+
+async function updateProductName(productId, newName) {
+  const safeName = String(newName || "").trim();
+  if (!safeName) throw new Error("New product name is required.");
+
+  const res = await pool.query(
+    `
+    UPDATE shop_products
+    SET name = $2,
+        updated_at = NOW()
+    WHERE product_id = $1
+    RETURNING product_id, sku, name
+    `,
+    [productId, safeName]
+  );
+
+  return res.rows[0] || null;
+}
+
+async function updateProductPrice(productId, newPricePence) {
+  const safePrice = Number(newPricePence);
+  if (!Number.isFinite(safePrice) || safePrice < 0) {
+    throw new Error("Price must be 0 or more.");
+  }
+
+  const res = await pool.query(
+    `
+    UPDATE shop_products
+    SET price_pence = $2,
+        updated_at = NOW()
+    WHERE product_id = $1
+    RETURNING product_id, sku, name, price_pence
+    `,
+    [productId, safePrice]
+  );
+
+  return res.rows[0] || null;
+}
+
+async function updateProductStock(productId, newStockQty) {
+  const safeStock = Number(newStockQty);
+  if (!Number.isFinite(safeStock) || safeStock < 0) {
+    throw new Error("Stock must be 0 or more.");
+  }
+
+  const res = await pool.query(
+    `
+    UPDATE shop_products
+    SET stock_qty = $2,
+        updated_at = NOW()
+    WHERE product_id = $1
+    RETURNING product_id, sku, name, stock_qty
+    `,
+    [productId, safeStock]
+  );
+
+  return res.rows[0] || null;
+}
+
+async function archiveProduct(productId) {
+  const res = await pool.query(
+    `
+    UPDATE shop_products
+    SET is_active = FALSE,
+        updated_at = NOW()
+    WHERE product_id = $1
+    RETURNING product_id, sku, name
+    `,
+    [productId]
+  );
+
+  return res.rows[0] || null;
+}
+
+async function getCartQtyForProduct(userId, productId) {
   const res = await pool.query(
     `
     SELECT COALESCE(SUM(ci.qty), 0) AS qty
     FROM carts c
     JOIN cart_items ci ON ci.cart_id = c.cart_id
-    WHERE c.user_id = $1 AND c.status='open' AND ci.sku = $2
+    WHERE c.user_id = $1
+      AND c.status = 'open'
+      AND ci.product_id = $2
     `,
-    [userId, sku]
+    [userId, productId]
   );
+
   return Number(res.rows[0]?.qty || 0);
 }
 
@@ -541,7 +895,7 @@ async function upsertProfile(userId, fullName, email, phone, shipping) {
     SET full_name = EXCLUDED.full_name,
         email = EXCLUDED.email,
         phone = EXCLUDED.phone,
-        updated_at = NOW();
+        updated_at = NOW()
     `,
     [userId, fullName, email, phone]
   );
@@ -553,70 +907,110 @@ async function upsertProfile(userId, fullName, email, phone, shipping) {
     ON CONFLICT (user_id) DO UPDATE
     SET full_address = EXCLUDED.full_address,
         country = EXCLUDED.country,
-        updated_at = NOW();
+        updated_at = NOW()
     `,
     [userId, shipping.full_address, shipping.country]
   );
 }
 
 async function getOrCreateCart(userId) {
-  const existing = await pool.query(`SELECT cart_id FROM carts WHERE user_id=$1 AND status='open'`, [userId]);
+  const existing = await pool.query(
+    `SELECT cart_id FROM carts WHERE user_id = $1 AND status = 'open'`,
+    [userId]
+  );
+
   if (existing.rows.length) return existing.rows[0].cart_id;
 
   const created = await pool.query(
-    `INSERT INTO carts (user_id, status, discount_code, discount_percent, updated_at)
-     VALUES ($1, 'open', NULL, 0, NOW())
-     RETURNING cart_id`,
+    `
+    INSERT INTO carts (user_id, status, discount_code, discount_percent, updated_at)
+    VALUES ($1, 'open', NULL, 0, NOW())
+    RETURNING cart_id
+    `,
     [userId]
   );
+
   return created.rows[0].cart_id;
 }
 
-async function addCartItem(userId, item) {
-  const stockQty = await getStockForSku(item.sku);
-  const existingCartQty = await getCartQtyForSku(userId, item.sku);
+async function addCartItem(userId, product, qty) {
+  const existingCartQty = await getCartQtyForProduct(userId, product.product_id);
 
-  if (existingCartQty + item.qty > stockQty) {
-    throw new Error(`Only ${stockQty} in stock for ${item.name}.`);
+  if (existingCartQty + qty > Number(product.stock_qty || 0)) {
+    throw new Error(`Only ${product.stock_qty} in stock for ${product.name}.`);
   }
 
   const cartId = await getOrCreateCart(userId);
+
   await pool.query(
     `
-    INSERT INTO cart_items (cart_id, sku, name, size, color, qty, price_pence)
-    VALUES ($1, $2, $3, $4, $5, $6, $7)
+    INSERT INTO cart_items (cart_id, product_id, sku, name, size, color, qty, price_pence)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
     `,
-    [cartId, item.sku, item.name, item.size, item.color, item.qty, item.price_pence]
+    [
+      cartId,
+      product.product_id,
+      product.sku,
+      product.name,
+      product.default_size || DEFAULT_SIZE,
+      product.default_color || DEFAULT_COLOR,
+      qty,
+      product.price_pence,
+    ]
   );
 }
 
 async function clearCart(userId) {
-  const cart = await pool.query(`SELECT cart_id FROM carts WHERE user_id=$1 AND status='open'`, [userId]);
+  const cart = await pool.query(
+    `SELECT cart_id FROM carts WHERE user_id = $1 AND status = 'open'`,
+    [userId]
+  );
+
   if (!cart.rows.length) return;
 
   const cartId = cart.rows[0].cart_id;
-  await pool.query(`DELETE FROM cart_items WHERE cart_id=$1`, [cartId]);
-  await pool.query(`DELETE FROM carts WHERE cart_id=$1`, [cartId]);
+  await pool.query(`DELETE FROM cart_items WHERE cart_id = $1`, [cartId]);
+  await pool.query(`DELETE FROM carts WHERE cart_id = $1`, [cartId]);
 }
 
 async function getCartSummary(userId) {
-  const cart = await pool.query(`SELECT cart_id FROM carts WHERE user_id=$1 AND status='open'`, [userId]);
-  if (!cart.rows.length) return { items: [], subtotal_pence: 0 };
+  const cart = await pool.query(
+    `SELECT cart_id FROM carts WHERE user_id = $1 AND status = 'open'`,
+    [userId]
+  );
+
+  if (!cart.rows.length) {
+    return { items: [], subtotal_pence: 0 };
+  }
 
   const cartId = cart.rows[0].cart_id;
+
   const itemsRes = await pool.query(
-    `SELECT sku, name, size, color, qty, price_pence FROM cart_items WHERE cart_id=$1 ORDER BY id ASC`,
+    `
+    SELECT product_id, sku, name, size, color, qty, price_pence
+    FROM cart_items
+    WHERE cart_id = $1
+    ORDER BY id ASC
+    `,
     [cartId]
   );
 
   const items = itemsRes.rows;
-  const subtotal_pence = items.reduce((sum, it) => sum + it.qty * it.price_pence, 0);
+  const subtotal_pence = items.reduce(
+    (sum, it) => sum + Number(it.qty) * Number(it.price_pence),
+    0
+  );
+
   return { items, subtotal_pence };
 }
 
 async function getCartDiscount(userId) {
   const res = await pool.query(
-    `SELECT discount_code, discount_percent FROM carts WHERE user_id=$1 AND status='open'`,
+    `
+    SELECT discount_code, discount_percent
+    FROM carts
+    WHERE user_id = $1 AND status = 'open'
+    `,
     [userId]
   );
 
@@ -636,12 +1030,12 @@ async function setCartDiscount(userId, code, percent) {
   await pool.query(
     `
     UPDATE carts
-    SET discount_code=$1,
-        discount_percent=$2,
-        updated_at=NOW()
-    WHERE cart_id=$3
+    SET discount_code = $1,
+        discount_percent = $2,
+        updated_at = NOW()
+    WHERE cart_id = $3
     `,
-    [normalizeDiscountCode(code), percent, cartId]
+    [normalizeDiscountCode(code), Number(percent || 0), cartId]
   );
 }
 
@@ -649,22 +1043,33 @@ async function clearCartDiscount(userId) {
   await pool.query(
     `
     UPDATE carts
-    SET discount_code=NULL,
-        discount_percent=0,
-        updated_at=NOW()
-    WHERE user_id=$1 AND status='open'
+    SET discount_code = NULL,
+        discount_percent = 0,
+        updated_at = NOW()
+    WHERE user_id = $1 AND status = 'open'
     `,
     [userId]
   );
 }
 
 async function hasUserPlacedOrderBefore(userId) {
-  const res = await pool.query(`SELECT 1 FROM orders WHERE user_id=$1 LIMIT 1`, [userId]);
+  const res = await pool.query(`SELECT 1 FROM orders WHERE user_id = $1 LIMIT 1`, [userId]);
   return res.rows.length > 0;
 }
 
 async function hasUserPendingOrder(userId) {
-  return false;
+  const res = await pool.query(
+    `
+    SELECT 1
+    FROM orders
+    WHERE user_id = $1
+      AND status IN ('pending', 'paid', 'dispatched')
+    LIMIT 1
+    `,
+    [userId]
+  );
+
+  return res.rows.length > 0;
 }
 
 async function getUserShippingProfile(userId) {
@@ -677,6 +1082,7 @@ async function getUserShippingProfile(userId) {
     `,
     [userId]
   );
+
   return res.rows[0] || null;
 }
 
@@ -684,19 +1090,18 @@ async function buildCartMessage(userId, heading = "✅ **Added to basket.**") {
   const cart = await getCartSummary(userId);
   const profile = await getUserShippingProfile(userId);
   const shippingPence = getShippingPenceForCountry(profile?.country);
-
   const discount = await getCartDiscount(userId);
-  const totals = calculateDiscountedTotals(
-    cart.subtotal_pence,
-    shippingPence,
-    discount.discount_percent
-  );
+  const totals = calculateDiscountedTotals(cart.subtotal_pence, shippingPence, discount.discount_percent);
 
   const basketLines = [];
   for (const it of cart.items) {
-    const stockQty = await getStockForSku(it.sku);
+    const product = it.product_id ? await getProductById(it.product_id) : null;
+    const stockQty = Number(product?.stock_qty || 0);
+
     basketLines.push(
-      `• **${it.name}** (${it.size}, ${it.color}) × ${it.qty} — ${money(it.qty * it.price_pence)} _[Stock: ${stockQty}]_`
+      `• **${it.name}** (${it.size}, ${it.color}) × ${it.qty} — ${money(
+        Number(it.qty) * Number(it.price_pence)
+      )} _[Stock: ${stockQty}]_`
     );
   }
 
@@ -725,6 +1130,7 @@ const SHIPPING_USA_PENCE = 4500;
 
 function getShippingPenceForCountry(countryRaw) {
   const c = String(countryRaw || "").trim().toLowerCase();
+
   if (!c) return SHIPPING_EU_PENCE;
 
   const isUK =
@@ -739,7 +1145,12 @@ function getShippingPenceForCountry(countryRaw) {
 
   if (isUK) return SHIPPING_UK_PENCE;
 
-  const isUSA = c.includes("usa") || c === "us" || c.includes("united states") || c.includes("america");
+  const isUSA =
+    c.includes("usa") ||
+    c === "us" ||
+    c.includes("united states") ||
+    c.includes("america");
+
   if (isUSA) return SHIPPING_USA_PENCE;
 
   return SHIPPING_EU_PENCE;
@@ -750,17 +1161,17 @@ function getShippingPenceForCountry(countryRaw) {
 const commands = [
   new SlashCommandBuilder()
     .setName("setupshop")
-    .setDescription("Post/refresh the shop menu message in the menu channel")
+    .setDescription("Post or refresh the shop menu message in the menu channel")
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
 
   new SlashCommandBuilder()
     .setName("setupverify")
-    .setDescription("Post/refresh the verification panel in the verify channel")
+    .setDescription("Post or refresh the verification panel in the verify channel")
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
 
   new SlashCommandBuilder()
     .setName("setupstaffpanel")
-    .setDescription("Post/refresh the staff control panel in the staff-only channel")
+    .setDescription("Post or refresh the staff control panel in the staff-only channel")
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
 
   new SlashCommandBuilder()
@@ -770,7 +1181,9 @@ const commands = [
 
 async function registerCommands() {
   const rest = new REST({ version: "10" }).setToken(TOKEN);
-  await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
+  await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), {
+    body: commands,
+  });
 }
 
 /* ------------------------------ UI BUILDERS ------------------------------ */
@@ -778,79 +1191,109 @@ async function registerCommands() {
 function menuMessageComponents() {
   return [
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId("open_menu").setLabel("Click to see our menu").setStyle(ButtonStyle.Primary)
+      new ButtonBuilder()
+        .setCustomId("open_menu")
+        .setLabel("Click to see our menu")
+        .setStyle(ButtonStyle.Primary)
     ),
   ];
 }
 
-function categorySelectComponents() {
+async function categorySelectComponents() {
+  const categories = await getActiveCategories();
+  if (!categories.length) return [];
+
   return [
     new ActionRowBuilder().addComponents(
       new StringSelectMenuBuilder()
         .setCustomId("select_category")
         .setPlaceholder("Choose a category…")
-        .addOptions(categoryOptions)
+        .addOptions(
+          categories.slice(0, 25).map((cat) => ({
+            label: String(cat.name).slice(0, 100),
+            value: String(cat.category_id),
+          }))
+        )
     ),
   ];
 }
 
-async function itemSelectComponents(category) {
-  const items = CATALOG[category] || [];
-  const options = [];
-
-  for (const it of items) {
-    const stockQty = await getStockForSku(it.sku);
-    options.push({
-      label: `${it.name} — ${money(it.price_pence)} — Stock ${stockQty}`.slice(0, 100),
-      value: it.sku,
-      description: stockQty > 0 ? `Available: ${stockQty}` : "Out of stock",
-    });
-  }
+async function itemSelectComponents(categoryId) {
+  const items = await getActiveProductsByCategoryId(categoryId);
+  if (!items.length) return [];
 
   return [
     new ActionRowBuilder().addComponents(
       new StringSelectMenuBuilder()
-        .setCustomId(`select_item:${category}`)
+        .setCustomId(`select_item:${categoryId}`)
         .setPlaceholder("Choose an item…")
-        .addOptions(options)
+        .addOptions(
+          items.slice(0, 25).map((it) => ({
+            label: `${it.name} — ${money(it.price_pence)} — Stock ${it.stock_qty}`.slice(0, 100),
+            value: String(it.product_id),
+            description: it.stock_qty > 0
+              ? `SKU ${it.sku}`.slice(0, 100)
+              : `Out of stock • SKU ${it.sku}`.slice(0, 100),
+          }))
+        )
     ),
   ];
 }
 
-async function qtyButtonsComponents(category, sku) {
-  const stockQty = await getStockForSku(sku);
+async function qtyButtonsComponents(productId) {
+  const product = await getProductById(productId);
+  const stockQty = Number(product?.stock_qty || 0);
   const maxQuickQty = Math.min(stockQty, 5);
   const quickButtons = [];
 
   for (let n = 1; n <= maxQuickQty; n += 1) {
     quickButtons.push(
       new ButtonBuilder()
-        .setCustomId(`add_qty:${category}:${sku}:${n}`)
+        .setCustomId(`add_qty:${productId}:${n}`)
         .setLabel(String(n))
         .setStyle(ButtonStyle.Secondary)
     );
   }
 
-  const row1 = new ActionRowBuilder().addComponents(...quickButtons);
+  const rows = [];
 
-  const row2 = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`add_qty_other:${category}:${sku}`)
-      .setLabel("Other…")
-      .setStyle(ButtonStyle.Primary)
-      .setDisabled(stockQty <= 0)
+  if (quickButtons.length) {
+    rows.push(new ActionRowBuilder().addComponents(...quickButtons));
+  }
+
+  rows.push(
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`add_qty_other:${productId}`)
+        .setLabel("Other…")
+        .setStyle(ButtonStyle.Primary)
+        .setDisabled(stockQty <= 0)
+    )
   );
 
-  return [row1, row2];
+  return rows;
 }
 
 function cartActionsComponents(disableSubmit = false) {
   return [
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId("cart_add_more").setLabel("Add Another Item").setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId("cart_discount").setLabel("Apply Discount Code").setStyle(ButtonStyle.Primary),
-      new ButtonBuilder().setCustomId("cart_submit").setLabel("Submit Order ✅").setStyle(ButtonStyle.Success).setDisabled(disableSubmit),
-      new ButtonBuilder().setCustomId("cart_clear").setLabel("Clear Cart").setStyle(ButtonStyle.Danger)
+      new ButtonBuilder()
+        .setCustomId("cart_add_more")
+        .setLabel("Add Another Item")
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId("cart_discount")
+        .setLabel("Apply Discount Code")
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId("cart_submit")
+        .setLabel("Submit Order ✅")
+        .setStyle(ButtonStyle.Success)
+        .setDisabled(disableSubmit),
+      new ButtonBuilder()
+        .setCustomId("cart_clear")
+        .setLabel("Clear Cart")
+        .setStyle(ButtonStyle.Danger)
     ),
   ];
 }
@@ -869,7 +1312,7 @@ function verifyPanelComponents() {
         "• Email address",
         "• Phone number",
         "",
-        "Failure to complete the form correctly may affect whether you are verified."
+        "Failure to complete the form correctly may affect whether you are verified.",
       ].join("\n")
     );
 
@@ -902,19 +1345,31 @@ function staffPanelComponents() {
         "Use the buttons below to manage the shop.",
         "",
         "Available actions:",
+        "• Manage categories",
+        "• Manage products",
         "• Adjust stock",
-        "• Lookup an order",
+        "• Lookup order",
         "• Create discount code",
         "• Toggle discount code active/inactive",
-        "• Restock all items to default"
       ].join("\n")
     );
 
   const row1 = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
-      .setCustomId("staff_open_stock_modal")
-      .setLabel("Adjust Stock")
+      .setCustomId("staff_manage_categories")
+      .setLabel("Manage Categories")
       .setStyle(ButtonStyle.Primary),
+    new ButtonBuilder()
+      .setCustomId("staff_manage_products")
+      .setLabel("Manage Products")
+      .setStyle(ButtonStyle.Primary),
+    new ButtonBuilder()
+      .setCustomId("staff_open_stock_flow")
+      .setLabel("Adjust Stock")
+      .setStyle(ButtonStyle.Secondary)
+  );
+
+  const row2 = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId("staff_open_orderlookup_modal")
       .setLabel("Lookup Order")
@@ -922,83 +1377,103 @@ function staffPanelComponents() {
     new ButtonBuilder()
       .setCustomId("staff_open_create_discount_modal")
       .setLabel("Create Discount Code")
-      .setStyle(ButtonStyle.Success)
-  );
-
-  const row2 = new ActionRowBuilder().addComponents(
+      .setStyle(ButtonStyle.Success),
     new ButtonBuilder()
       .setCustomId("staff_open_toggle_discount_modal")
       .setLabel("Toggle Discount Code")
-      .setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder()
-      .setCustomId("staff_restock_all_confirm")
-      .setLabel("Restock All")
-      .setStyle(ButtonStyle.Danger)
+      .setStyle(ButtonStyle.Secondary)
   );
 
   return { embed, rows: [row1, row2] };
 }
 
-function staffStockCategoryComponents() {
+function staffCategoryActionButtons() {
   return [
     new ActionRowBuilder().addComponents(
-      new StringSelectMenuBuilder()
-        .setCustomId("staff_stock_select_category")
-        .setPlaceholder("Choose a category…")
-        .addOptions(
-          Object.keys(CATALOG).map((category) => ({
-            label: category.slice(0, 100),
-            value: category,
-          }))
-        )
+      new ButtonBuilder()
+        .setCustomId("staff_open_add_category_modal")
+        .setLabel("Add Category")
+        .setStyle(ButtonStyle.Success),
+      new ButtonBuilder()
+        .setCustomId("staff_start_rename_category")
+        .setLabel("Rename Category")
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId("staff_start_archive_category")
+        .setLabel("Archive Category")
+        .setStyle(ButtonStyle.Danger)
     ),
   ];
 }
 
-function staffStockItemComponents(category) {
-  const items = CATALOG[category] || [];
-
+function staffProductActionButtons() {
   return [
     new ActionRowBuilder().addComponents(
-      new StringSelectMenuBuilder()
-        .setCustomId(`staff_stock_select_item:${category}`)
-        .setPlaceholder("Choose an item…")
-        .addOptions(
-          items.map((item) => ({
-            label: `${item.name}`.slice(0, 100),
-            description: `SKU: ${item.sku}`.slice(0, 100),
-            value: item.sku,
-          }))
-        )
+      new ButtonBuilder()
+        .setCustomId("staff_open_add_product_pick_category")
+        .setLabel("Add Product")
+        .setStyle(ButtonStyle.Success),
+      new ButtonBuilder()
+        .setCustomId("staff_start_rename_product")
+        .setLabel("Rename Product")
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId("staff_start_change_price")
+        .setLabel("Change Price")
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId("staff_start_archive_product")
+        .setLabel("Archive Product")
+        .setStyle(ButtonStyle.Danger)
     ),
   ];
 }
 
-function staffStockQtyModal(category, sku) {
-  const item = (CATALOG[category] || []).find((x) => x.sku === sku);
+async function staffCategorySelectMenus(customId, placeholder = "Choose a category…", includeInactive = false) {
+  const categories = includeInactive ? await getAllCategoriesForStaff() : await getActiveCategories();
+  if (!categories.length) return [];
 
-  const modal = new ModalBuilder()
-    .setCustomId(`staff_stock_qty_modal:${category}:${sku}`)
-    .setTitle("Update Stock");
+  const options = categories.map((cat) => ({
+    label: `${cat.name}${cat.is_active === false ? " [inactive]" : ""}`.slice(0, 100),
+    value: String(cat.category_id),
+  }));
 
-  const qtyInput = new TextInputBuilder()
-    .setCustomId("stock_qty")
-    .setLabel(`New stock for ${item?.name || sku}`.slice(0, 45))
-    .setStyle(TextInputStyle.Short)
-    .setRequired(true)
-    .setPlaceholder("Example: 25");
-
-  modal.addComponents(
-    new ActionRowBuilder().addComponents(qtyInput)
+  return chunkOptions(options).map((chunk, idx) =>
+    new ActionRowBuilder().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId(idx === 0 ? customId : `${customId}:${idx}`)
+        .setPlaceholder(placeholder)
+        .addOptions(chunk)
+    )
   );
+}
 
-  return modal;
+async function staffProductSelectMenus(customId, placeholder = "Choose a product…") {
+  const products = await getAllActiveProductsForStaff();
+  if (!products.length) return [];
+
+  const options = products.map((p) => ({
+    label: `${p.name} (${p.sku})`.slice(0, 100),
+    value: String(p.product_id),
+    description: `${p.category_name} • ${money(p.price_pence)} • Stock ${p.stock_qty}`.slice(0, 100),
+  }));
+
+  return chunkOptions(options).map((chunk, idx) =>
+    new ActionRowBuilder().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId(idx === 0 ? customId : `${customId}:${idx}`)
+        .setPlaceholder(placeholder)
+        .addOptions(chunk)
+    )
+  );
 }
 
 /* -------------------------- MODALS (MAX 5 INPUTS) ------------------------- */
 
 function shippingModal() {
-  const modal = new ModalBuilder().setCustomId("shipping_modal").setTitle("Shipping details");
+  const modal = new ModalBuilder()
+    .setCustomId("shipping_modal")
+    .setTitle("Shipping details");
 
   const fullName = new TextInputBuilder()
     .setCustomId("full_name")
@@ -1041,8 +1516,10 @@ function shippingModal() {
   return modal;
 }
 
-function qtyOtherModal(category, sku) {
-  const modal = new ModalBuilder().setCustomId(`qty_other_modal:${category}:${sku}`).setTitle("Quantity");
+function qtyOtherModal(productId) {
+  const modal = new ModalBuilder()
+    .setCustomId(`qty_other_modal:${productId}`)
+    .setTitle("Quantity");
 
   const qty = new TextInputBuilder()
     .setCustomId("qty")
@@ -1055,7 +1532,9 @@ function qtyOtherModal(category, sku) {
 }
 
 function discountCodeModal() {
-  const modal = new ModalBuilder().setCustomId("discount_code_modal").setTitle("Apply discount code");
+  const modal = new ModalBuilder()
+    .setCustomId("discount_code_modal")
+    .setTitle("Apply discount code");
 
   const code = new TextInputBuilder()
     .setCustomId("discount_code")
@@ -1188,21 +1667,154 @@ function staffToggleDiscountModal() {
   return modal;
 }
 
+function addCategoryModal() {
+  const modal = new ModalBuilder()
+    .setCustomId("staff_add_category_modal")
+    .setTitle("Add Category");
+
+  const nameInput = new TextInputBuilder()
+    .setCustomId("category_name")
+    .setLabel("Category name")
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+    .setPlaceholder("Example: Accessories");
+
+  modal.addComponents(new ActionRowBuilder().addComponents(nameInput));
+  return modal;
+}
+
+function renameCategoryModal(categoryId, currentName) {
+  const modal = new ModalBuilder()
+    .setCustomId(`staff_rename_category_modal:${categoryId}`)
+    .setTitle("Rename Category");
+
+  const nameInput = new TextInputBuilder()
+    .setCustomId("category_name")
+    .setLabel("New category name")
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+    .setValue(String(currentName || "").slice(0, 100));
+
+  modal.addComponents(new ActionRowBuilder().addComponents(nameInput));
+  return modal;
+}
+
+function addProductModal(categoryId, categoryName) {
+  const modal = new ModalBuilder()
+    .setCustomId(`staff_add_product_modal:${categoryId}`)
+    .setTitle("Add Product");
+
+  const skuInput = new TextInputBuilder()
+    .setCustomId("sku")
+    .setLabel("SKU")
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+    .setPlaceholder("Example: NEW01");
+
+  const nameInput = new TextInputBuilder()
+    .setCustomId("name")
+    .setLabel(`Product name for ${String(categoryName || "").slice(0, 30)}`)
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+    .setPlaceholder("Example: New Product");
+
+  const priceInput = new TextInputBuilder()
+    .setCustomId("price_pence")
+    .setLabel("Price in pence")
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+    .setPlaceholder("Example: 2500");
+
+  const stockInput = new TextInputBuilder()
+    .setCustomId("stock_qty")
+    .setLabel("Stock quantity")
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+    .setPlaceholder("Example: 10");
+
+  const sizeInput = new TextInputBuilder()
+    .setCustomId("default_size")
+    .setLabel("Default size")
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+    .setValue(DEFAULT_SIZE);
+
+  modal.addComponents(
+    new ActionRowBuilder().addComponents(skuInput),
+    new ActionRowBuilder().addComponents(nameInput),
+    new ActionRowBuilder().addComponents(priceInput),
+    new ActionRowBuilder().addComponents(stockInput),
+    new ActionRowBuilder().addComponents(sizeInput)
+  );
+
+  return modal;
+}
+
+function renameProductModal(productId, currentName) {
+  const modal = new ModalBuilder()
+    .setCustomId(`staff_rename_product_modal:${productId}`)
+    .setTitle("Rename Product");
+
+  const nameInput = new TextInputBuilder()
+    .setCustomId("product_name")
+    .setLabel("New product name")
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+    .setValue(String(currentName || "").slice(0, 100));
+
+  modal.addComponents(new ActionRowBuilder().addComponents(nameInput));
+  return modal;
+}
+
+function changePriceModal(productId, currentPricePence) {
+  const modal = new ModalBuilder()
+    .setCustomId(`staff_change_price_modal:${productId}`)
+    .setTitle("Change Product Price");
+
+  const priceInput = new TextInputBuilder()
+    .setCustomId("price_pence")
+    .setLabel("New price in pence")
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+    .setValue(String(currentPricePence || 0));
+
+  modal.addComponents(new ActionRowBuilder().addComponents(priceInput));
+  return modal;
+}
+
+function changeStockModal(productId, currentStockQty, name) {
+  const modal = new ModalBuilder()
+    .setCustomId(`staff_change_stock_modal:${productId}`)
+    .setTitle("Adjust Stock");
+
+  const stockInput = new TextInputBuilder()
+    .setCustomId("stock_qty")
+    .setLabel(`New stock for ${String(name || "").slice(0, 40)}`)
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+    .setValue(String(currentStockQty || 0));
+
+  modal.addComponents(new ActionRowBuilder().addComponents(stockInput));
+  return modal;
+}
+
 /* ---------------------------- RECEIPT CHANNEL ---------------------------- */
 
 async function createReceiptChannel(guild, user, orderId) {
-  const category = await guild.channels.fetch(ORDERS_CATEGORY_ID);
+  const category = await guild.channels.fetch(ORDERS_CATEGORY_ID).catch(() => null);
 
-  const name = safeChannelName(`order-${user.username}-${orderId}`);
   const channel = await guild.channels.create({
-    name,
+    name: safeChannelName(`order-${user.username}-${orderId}`),
     type: ChannelType.GuildText,
     parent: category?.id || null,
     permissionOverwrites: [
       { id: guild.roles.everyone.id, deny: ["ViewChannel"] },
       { id: user.id, allow: ["ViewChannel", "SendMessages", "ReadMessageHistory"] },
       { id: STAFF_ROLE_ID, allow: ["ViewChannel", "SendMessages", "ReadMessageHistory"] },
-      { id: guild.members.me.id, allow: ["ViewChannel", "SendMessages", "ReadMessageHistory", "ManageChannels"] },
+      {
+        id: guild.members.me.id,
+        allow: ["ViewChannel", "SendMessages", "ReadMessageHistory", "ManageChannels"],
+      },
     ],
   });
 
@@ -1211,7 +1823,10 @@ async function createReceiptChannel(guild, user, orderId) {
 
 function bankDetailsText(orderId) {
   const ref = `ORDER-${orderId}`;
-  const extras = [BANK_IBAN ? `IBAN: ${BANK_IBAN}` : null, BANK_SWIFT ? `SWIFT/BIC: ${BANK_SWIFT}` : null].filter(Boolean);
+  const extras = [
+    BANK_IBAN ? `IBAN: ${BANK_IBAN}` : null,
+    BANK_SWIFT ? `SWIFT/BIC: ${BANK_SWIFT}` : null,
+  ].filter(Boolean);
 
   return (
     `**Bank:** ${BANK_BANK_NAME}\n` +
@@ -1223,9 +1838,19 @@ function bankDetailsText(orderId) {
   );
 }
 
-function receiptEmbed(orderId, items, subtotal, discountAmount, discountCode, shipping, total, shippingProfile, status = "pending") {
+function receiptEmbed(
+  orderId,
+  items,
+  subtotal,
+  discountAmount,
+  discountCode,
+  shipping,
+  total,
+  shippingProfile,
+  status = "pending"
+) {
   const lines = items.map(
-    (it) => `• **${it.name}** (${it.size}, ${it.color}) × ${it.qty} — ${money(it.qty * it.price_pence)}`
+    (it) => `• **${it.name}** (${it.size}, ${it.color}) × ${it.qty} — ${money(Number(it.qty) * Number(it.price_pence))}`
   );
 
   const fields = [
@@ -1260,7 +1885,10 @@ function receiptEmbed(orderId, items, subtotal, discountAmount, discountCode, sh
         `Once paid, a staff member will confirm and mark the order as paid.\n\n` +
         bankDetailsText(orderId),
     },
-    { name: "Dispatch", value: "Cut-off: **15:30 (Mon–Fri Dispatch)**" }
+    {
+      name: "Dispatch",
+      value: "Cut-off: **15:30 (Mon–Fri Dispatch)**",
+    }
   );
 
   return new EmbedBuilder()
@@ -1317,9 +1945,7 @@ function staffReceiptControls(orderId, status = "pending") {
   ];
 }
 
-/* ------------------------------ INTERACTIONS ----------------------------- */
-
-/* ------------------------------ INTERACTIONS ----------------------------- */
+/* ------------------------------- CLIENT ------------------------------- */
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
@@ -1328,6 +1954,8 @@ const client = new Client({
 
 const CART_UI_MESSAGES = new Map();
 const SHOP_SESSION_CHANNELS = new Map();
+
+/* ------------------------ SHOP SESSION HELPERS ------------------------ */
 
 async function getTrackedCartUiMessage(userId, channel) {
   const tracked = CART_UI_MESSAGES.get(userId);
@@ -1378,11 +2006,9 @@ async function createOrGetShopSessionChannel(guild, user) {
 
   const topicMarker = `shop-session:${user.id}`;
   const cachedExisting = guild.channels.cache.find(
-    (ch) =>
-      ch &&
-      ch.type === ChannelType.GuildText &&
-      ch.topic === topicMarker
+    (ch) => ch && ch.type === ChannelType.GuildText && ch.topic === topicMarker
   );
+
   if (cachedExisting) {
     trackShopSessionChannel(user.id, cachedExisting.id);
     return cachedExisting;
@@ -1400,7 +2026,10 @@ async function createOrGetShopSessionChannel(guild, user) {
       { id: guild.roles.everyone.id, deny: ["ViewChannel"] },
       { id: user.id, allow: ["ViewChannel", "SendMessages", "ReadMessageHistory"] },
       { id: STAFF_ROLE_ID, allow: ["ViewChannel", "SendMessages", "ReadMessageHistory"] },
-      { id: guild.members.me.id, allow: ["ViewChannel", "SendMessages", "ReadMessageHistory", "ManageChannels"] },
+      {
+        id: guild.members.me.id,
+        allow: ["ViewChannel", "SendMessages", "ReadMessageHistory", "ManageChannels"],
+      },
     ],
   });
 
@@ -1417,6 +2046,7 @@ async function sendOrEditCartUiMessage(interaction, payload, options = {}) {
   const existing = await getTrackedCartUiMessage(interaction.user.id, targetChannel);
 
   let msg;
+
   if (existing) {
     await existing.edit(payload);
     msg = existing;
@@ -1432,6 +2062,153 @@ async function sendOrEditCartUiMessage(interaction, payload, options = {}) {
   await interaction.deleteReply().catch(() => {});
   return { message: msg, channel: targetChannel };
 }
+
+/* ------------------------- ORDER DB HELPERS ------------------------- */
+
+async function createOrderFromCart(userId, shippingProfile, cart, discount) {
+  const db = await pool.connect();
+
+  try {
+    await db.query("BEGIN");
+
+    const subtotal = Number(cart.subtotal_pence || 0);
+    const shipping = getShippingPenceForCountry(shippingProfile.country);
+
+    let safeDiscount = {
+      discount_code: discount.discount_code || null,
+      discount_percent: Number(discount.discount_percent || 0),
+    };
+
+    if (safeDiscount.discount_code) {
+      const validation = await validateDiscountCodeForUser(userId, safeDiscount.discount_code);
+      if (!validation.valid) {
+        throw new Error(`${validation.reason} The code has been removed from this basket.`);
+      }
+
+      safeDiscount = {
+        discount_code: validation.code,
+        discount_percent: Number(validation.discount_percent || 0),
+      };
+    }
+
+    for (const it of cart.items) {
+      if (!it.product_id) {
+        throw new Error(`Cart item ${it.name} is missing a product id.`);
+      }
+
+      const stockCheck = await db.query(
+        `SELECT stock_qty, is_active FROM shop_products WHERE product_id = $1 FOR UPDATE`,
+        [it.product_id]
+      );
+
+      const stockRow = stockCheck.rows[0];
+      const stockQty = Number(stockRow?.stock_qty || 0);
+      const isActive = !!stockRow?.is_active;
+
+      if (!isActive) {
+        throw new Error(`${it.name} is no longer available.`);
+      }
+
+      if (Number(it.qty) > stockQty) {
+        throw new Error(`Stock changed. Only ${stockQty} left for ${it.name}. Please update your basket and try again.`);
+      }
+    }
+
+    const totals = calculateDiscountedTotals(subtotal, shipping, safeDiscount.discount_percent);
+
+    const orderRes = await db.query(
+      `
+      INSERT INTO orders (
+        user_id, full_name, email, phone, full_address, country,
+        subtotal_pence, shipping_pence, total_pence, discount_code,
+        discount_percent, discount_amount_pence, status
+      )
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'pending')
+      RETURNING order_id
+      `,
+      [
+        userId,
+        shippingProfile.full_name,
+        shippingProfile.email,
+        shippingProfile.phone,
+        shippingProfile.full_address,
+        shippingProfile.country,
+        subtotal,
+        shipping,
+        totals.total,
+        safeDiscount.discount_code,
+        safeDiscount.discount_percent,
+        totals.discountAmount,
+      ]
+    );
+
+    const orderId = Number(orderRes.rows[0].order_id);
+
+    for (const it of cart.items) {
+      await db.query(
+        `
+        INSERT INTO order_items (order_id, product_id, sku, name, size, color, qty, price_pence)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+        `,
+        [orderId, it.product_id, it.sku, it.name, it.size, it.color, it.qty, it.price_pence]
+      );
+
+      const stockUpdate = await db.query(
+        `
+        UPDATE shop_products
+        SET stock_qty = stock_qty - $1,
+            updated_at = NOW()
+        WHERE product_id = $2 AND stock_qty >= $1
+        `,
+        [it.qty, it.product_id]
+      );
+
+      if (!stockUpdate.rowCount) {
+        throw new Error(`Failed to reserve stock for ${it.name}. Please try again.`);
+      }
+    }
+
+    if (safeDiscount.discount_code) {
+      await db.query(
+        `
+        INSERT INTO discount_code_uses (code, user_id, order_id, used_at)
+        VALUES ($1, $2, $3, NOW())
+        ON CONFLICT (code, user_id) DO NOTHING
+        `,
+        [safeDiscount.discount_code, userId, orderId]
+      );
+    }
+
+    await db.query(
+      `DELETE FROM cart_items WHERE cart_id IN (SELECT cart_id FROM carts WHERE user_id = $1 AND status = 'open')`,
+      [userId]
+    );
+
+    await db.query(
+      `DELETE FROM carts WHERE user_id = $1 AND status = 'open'`,
+      [userId]
+    );
+
+    await db.query("COMMIT");
+
+    return {
+      orderId,
+      subtotal,
+      shipping,
+      total: totals.total,
+      discountAmount: totals.discountAmount,
+      discountCode: safeDiscount.discount_code,
+      discountPercent: safeDiscount.discount_percent,
+    };
+  } catch (err) {
+    await db.query("ROLLBACK");
+    throw err;
+  } finally {
+    db.release();
+  }
+}
+
+/* ------------------------------ INTERACTIONS ----------------------------- */
 
 client.on("interactionCreate", async (interaction) => {
   let deferred = false;
@@ -1461,9 +2238,12 @@ client.on("interactionCreate", async (interaction) => {
           `**Cut-off:** 15:30 (Mon–Fri Dispatch)\n\n` +
           `Browse our available products below. Stock updates live and staff support is available if needed.`;
 
-        await menuChannel.send({ content, components: menuMessageComponents() });
+        await menuChannel.send({
+          content,
+          components: menuMessageComponents(),
+        });
 
-        return interaction.editReply("✅ Shop menu message posted/refreshed in the menu channel.");
+        return interaction.editReply("✅ Shop menu message posted or refreshed in the menu channel.");
       }
 
       if (interaction.commandName === "setupverify") {
@@ -1567,7 +2347,7 @@ client.on("interactionCreate", async (interaction) => {
         return;
       }
 
-      if (customId === "staff_open_stock_modal") {
+      if (customId === "staff_manage_categories") {
         if (!isStaff(interaction.member)) {
           return interaction.reply({ content: "Staff only.", ephemeral: true });
         }
@@ -1576,8 +2356,43 @@ client.on("interactionCreate", async (interaction) => {
         }
 
         return interaction.reply({
-          content: "Choose a category to update stock:",
-          components: staffStockCategoryComponents(),
+          content: "Category management:",
+          components: staffCategoryActionButtons(),
+          ephemeral: true,
+        });
+      }
+
+      if (customId === "staff_manage_products") {
+        if (!isStaff(interaction.member)) {
+          return interaction.reply({ content: "Staff only.", ephemeral: true });
+        }
+        if (!isStaffChannel(interaction)) {
+          return interaction.reply({ content: "Use this in the staff-only channel.", ephemeral: true });
+        }
+
+        return interaction.reply({
+          content: "Product management:",
+          components: staffProductActionButtons(),
+          ephemeral: true,
+        });
+      }
+
+      if (customId === "staff_open_stock_flow") {
+        if (!isStaff(interaction.member)) {
+          return interaction.reply({ content: "Staff only.", ephemeral: true });
+        }
+        if (!isStaffChannel(interaction)) {
+          return interaction.reply({ content: "Use this in the staff-only channel.", ephemeral: true });
+        }
+
+        const menus = await staffProductSelectMenus("staff_pick_stock_product", "Choose a product to adjust stock…");
+        if (!menus.length) {
+          return interaction.reply({ content: "No active products found.", ephemeral: true });
+        }
+
+        return interaction.reply({
+          content: "Choose a product to adjust stock:",
+          components: menus,
           ephemeral: true,
         });
       }
@@ -1589,6 +2404,7 @@ client.on("interactionCreate", async (interaction) => {
         if (!isStaffChannel(interaction)) {
           return interaction.reply({ content: "Use this in the staff-only channel.", ephemeral: true });
         }
+
         return interaction.showModal(staffOrderLookupModal());
       }
 
@@ -1614,79 +2430,138 @@ client.on("interactionCreate", async (interaction) => {
         return interaction.showModal(staffToggleDiscountModal());
       }
 
-      if (customId === "staff_restock_all_confirm") {
+      if (customId === "staff_open_add_category_modal") {
         if (!isStaff(interaction.member)) {
           return interaction.reply({ content: "Staff only.", ephemeral: true });
         }
-        if (!isStaffChannel(interaction)) {
-          return interaction.reply({ content: "Use this in the staff-only channel.", ephemeral: true });
+        return interaction.showModal(addCategoryModal());
+      }
+
+      if (customId === "staff_start_rename_category") {
+        if (!isStaff(interaction.member)) {
+          return interaction.reply({ content: "Staff only.", ephemeral: true });
+        }
+
+        const menus = await staffCategorySelectMenus("staff_pick_rename_category", "Choose a category to rename…");
+        if (!menus.length) {
+          return interaction.reply({ content: "No active categories found.", ephemeral: true });
         }
 
         return interaction.reply({
-          content: "Are you sure you want to restock all items back to default values?",
-          components: [
-            new ActionRowBuilder().addComponents(
-              new ButtonBuilder()
-                .setCustomId("staff_restock_all_execute")
-                .setLabel("Yes, restock all")
-                .setStyle(ButtonStyle.Danger)
-            ),
-          ],
+          content: "Choose a category to rename:",
+          components: menus,
           ephemeral: true,
         });
       }
 
-      if (customId === "staff_restock_all_execute") {
+      if (customId === "staff_start_archive_category") {
         if (!isStaff(interaction.member)) {
           return interaction.reply({ content: "Staff only.", ephemeral: true });
         }
 
-        for (const category of Object.keys(CATALOG)) {
-          for (const item of CATALOG[category]) {
-            await pool.query(
-              `UPDATE stock_items SET stock_qty=$1, item_name=$2, updated_at=NOW() WHERE sku=$3`,
-              [item.stock_qty, item.name, item.sku]
-            );
-          }
+        const menus = await staffCategorySelectMenus("staff_pick_archive_category", "Choose a category to archive…");
+        if (!menus.length) {
+          return interaction.reply({ content: "No active categories found.", ephemeral: true });
         }
 
-        return interaction.update({
-          content: "✅ All stock reset to default values.",
-          components: [],
+        return interaction.reply({
+          content: "Choose a category to archive:",
+          components: menus,
+          ephemeral: true,
+        });
+      }
+
+      if (customId === "staff_open_add_product_pick_category") {
+        if (!isStaff(interaction.member)) {
+          return interaction.reply({ content: "Staff only.", ephemeral: true });
+        }
+
+        const menus = await staffCategorySelectMenus("staff_pick_add_product_category", "Choose a category for the new product…");
+        if (!menus.length) {
+          return interaction.reply({ content: "No active categories found.", ephemeral: true });
+        }
+
+        return interaction.reply({
+          content: "Choose the category for the new product:",
+          components: menus,
+          ephemeral: true,
+        });
+      }
+
+      if (customId === "staff_start_rename_product") {
+        if (!isStaff(interaction.member)) {
+          return interaction.reply({ content: "Staff only.", ephemeral: true });
+        }
+
+        const menus = await staffProductSelectMenus("staff_pick_rename_product", "Choose a product to rename…");
+        if (!menus.length) {
+          return interaction.reply({ content: "No active products found.", ephemeral: true });
+        }
+
+        return interaction.reply({
+          content: "Choose a product to rename:",
+          components: menus,
+          ephemeral: true,
+        });
+      }
+
+      if (customId === "staff_start_change_price") {
+        if (!isStaff(interaction.member)) {
+          return interaction.reply({ content: "Staff only.", ephemeral: true });
+        }
+
+        const menus = await staffProductSelectMenus("staff_pick_change_price_product", "Choose a product to change price…");
+        if (!menus.length) {
+          return interaction.reply({ content: "No active products found.", ephemeral: true });
+        }
+
+        return interaction.reply({
+          content: "Choose a product to change price:",
+          components: menus,
+          ephemeral: true,
+        });
+      }
+
+      if (customId === "staff_start_archive_product") {
+        if (!isStaff(interaction.member)) {
+          return interaction.reply({ content: "Staff only.", ephemeral: true });
+        }
+
+        const menus = await staffProductSelectMenus("staff_pick_archive_product", "Choose a product to archive…");
+        if (!menus.length) {
+          return interaction.reply({ content: "No active products found.", ephemeral: true });
+        }
+
+        return interaction.reply({
+          content: "Choose a product to archive:",
+          components: menus,
+          ephemeral: true,
         });
       }
 
       if (customId.startsWith("add_qty:")) {
         trackCartUiMessage(interaction.user.id, interaction.channel.id, interaction.message.id);
 
-        const [, category, sku, qtyStr] = customId.split(":");
-        const qty = parseInt(qtyStr, 10);
+        const [, productIdStr, qtyStr] = customId.split(":");
+        const productId = Number(productIdStr);
+        const qty = Number(qtyStr);
 
-        const item = (CATALOG[category] || []).find((x) => x.sku === sku);
-        if (!item) {
+        const product = await getProductById(productId);
+        if (!product || !product.is_active) {
           return interaction.update({
-            content: "❌ Item not found.",
-            components: categorySelectComponents(),
+            content: "❌ Item not found or no longer active.",
+            components: await categorySelectComponents(),
           });
         }
 
-        const stockQty = await getStockForSku(item.sku);
-        if (stockQty <= 0) {
+        if (Number(product.stock_qty || 0) <= 0) {
           return interaction.update({
             content: "❌ That item is out of stock.",
-            components: categorySelectComponents(),
+            components: await categorySelectComponents(),
           });
         }
 
-        await addCartItem(interaction.user.id, {
-          sku: item.sku,
-          name: item.name,
-          size: DEFAULT_SIZE,
-          color: DEFAULT_COLOR,
-          qty,
-          price_pence: item.price_pence,
-        });
-
+        await addCartItem(interaction.user.id, product, qty);
         const content = await buildCartMessage(interaction.user.id);
 
         return interaction.update({
@@ -1697,15 +2572,16 @@ client.on("interactionCreate", async (interaction) => {
 
       if (customId.startsWith("add_qty_other:")) {
         trackCartUiMessage(interaction.user.id, interaction.channel.id, interaction.message.id);
-        const [, category, sku] = customId.split(":");
-        return interaction.showModal(qtyOtherModal(category, sku));
+        const [, productIdStr] = customId.split(":");
+        return interaction.showModal(qtyOtherModal(Number(productIdStr)));
       }
 
       if (customId === "cart_add_more") {
         trackCartUiMessage(interaction.user.id, interaction.channel.id, interaction.message.id);
+
         return interaction.update({
           content: "Choose a category:",
-          components: categorySelectComponents(),
+          components: await categorySelectComponents(),
         });
       }
 
@@ -1719,7 +2595,7 @@ client.on("interactionCreate", async (interaction) => {
               "🗑️ **Basket empty**\n\n" +
               "Your cart is empty.\n" +
               "Choose a category below to start a new order:",
-            components: categorySelectComponents(),
+            components: await categorySelectComponents(),
           });
         }
 
@@ -1728,7 +2604,6 @@ client.on("interactionCreate", async (interaction) => {
 
       if (customId === "cart_clear") {
         trackCartUiMessage(interaction.user.id, interaction.channel.id, interaction.message.id);
-
         await clearCart(interaction.user.id);
 
         return interaction.update({
@@ -1736,7 +2611,7 @@ client.on("interactionCreate", async (interaction) => {
             "🗑️ **Basket empty**\n\n" +
             "Your cart has been cleared.\n" +
             "Choose a category below to start a new order:",
-          components: categorySelectComponents(),
+          components: await categorySelectComponents(),
         });
       }
 
@@ -1768,7 +2643,7 @@ client.on("interactionCreate", async (interaction) => {
                 "🗑️ **Basket empty**\n\n" +
                 "Your cart is empty.\n" +
                 "Choose a category below to start a new order:",
-              components: categorySelectComponents(),
+              components: await categorySelectComponents(),
             });
           }
 
@@ -1780,97 +2655,25 @@ client.on("interactionCreate", async (interaction) => {
             });
           }
 
-          for (const it of cart.items) {
-            const stockQty = await getStockForSku(it.sku);
-            if (it.qty > stockQty) {
-              return interaction.update({
-                content: `Stock changed. Only ${stockQty} left for ${it.name}. Please update your basket and try again.`,
-                components: cartActionsComponents(),
-              });
-            }
-          }
+          const discount = await getCartDiscount(interaction.user.id);
 
-          const subtotal = cart.subtotal_pence;
-          const shipping = getShippingPenceForCountry(shippingProfile.country);
-
-          let discount = await getCartDiscount(interaction.user.id);
-
-          if (discount.discount_code) {
-            const validation = await validateDiscountCodeForUser(interaction.user.id, discount.discount_code);
-
-            if (!validation.valid) {
-              await clearCartDiscount(interaction.user.id);
-              return interaction.update({
-                content: `${validation.reason} The code has been removed from this basket.`,
-                components: cartActionsComponents(),
-              });
-            }
-
-            if (Number(discount.discount_percent || 0) !== Number(validation.discount_percent || 0)) {
-              await setCartDiscount(interaction.user.id, validation.code, validation.discount_percent);
-              discount = await getCartDiscount(interaction.user.id);
-            }
-          }
-
-          const totals = calculateDiscountedTotals(subtotal, shipping, discount.discount_percent);
-          const total = totals.total;
-
-          const orderRes = await pool.query(
-            `
-            INSERT INTO orders (
-              user_id, full_name, email, phone, full_address, country,
-              subtotal_pence, shipping_pence, total_pence, discount_code,
-              discount_percent, discount_amount_pence, status
-            )
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'pending')
-            RETURNING order_id
-            `,
-            [
-              interaction.user.id,
-              shippingProfile.full_name,
-              shippingProfile.email,
-              shippingProfile.phone,
-              shippingProfile.full_address,
-              shippingProfile.country,
-              subtotal,
-              shipping,
-              total,
-              discount.discount_code,
-              discount.discount_percent,
-              totals.discountAmount,
-            ]
+          const orderResult = await createOrderFromCart(
+            interaction.user.id,
+            shippingProfile,
+            cart,
+            discount
           );
 
-          const orderId = orderRes.rows[0].order_id;
+          const receiptChannel = await createReceiptChannel(
+            interaction.guild,
+            interaction.user,
+            orderResult.orderId
+          );
 
-          for (const it of cart.items) {
-            await pool.query(
-              `
-              INSERT INTO order_items (order_id, sku, name, size, color, qty, price_pence)
-              VALUES ($1,$2,$3,$4,$5,$6,$7)
-              `,
-              [orderId, it.sku, it.name, it.size, it.color, it.qty, it.price_pence]
-            );
-
-            await pool.query(
-              `
-              UPDATE stock_items
-              SET stock_qty = stock_qty - $1,
-                  updated_at = NOW()
-              WHERE sku = $2 AND stock_qty >= $1
-              `,
-              [it.qty, it.sku]
-            );
-          }
-
-          if (discount.discount_code) {
-            await recordDiscountCodeUse(interaction.user.id, discount.discount_code, orderId);
-          }
-
-          const guild = interaction.guild;
-          const receiptChannel = await createReceiptChannel(guild, interaction.user, orderId);
-
-          await pool.query(`UPDATE orders SET receipt_channel_id=$1 WHERE order_id=$2`, [receiptChannel.id, orderId]);
+          await pool.query(
+            `UPDATE orders SET receipt_channel_id = $1 WHERE order_id = $2`,
+            [receiptChannel.id, orderResult.orderId]
+          );
 
           await receiptChannel.send({
             content:
@@ -1879,18 +2682,18 @@ client.on("interactionCreate", async (interaction) => {
               `<@&${STAFF_ROLE_ID}> once confirmed, please mark as paid or dispatched when appropriate.`,
             embeds: [
               receiptEmbed(
-                orderId,
+                orderResult.orderId,
                 cart.items,
-                subtotal,
-                totals.discountAmount,
-                discount.discount_code,
-                shipping,
-                total,
+                orderResult.subtotal,
+                orderResult.discountAmount,
+                orderResult.discountCode,
+                orderResult.shipping,
+                orderResult.total,
                 shippingProfile,
                 "pending"
               ),
             ],
-            components: staffReceiptControls(orderId, "pending"),
+            components: staffReceiptControls(orderResult.orderId, "pending"),
           });
 
           const trackedCartMessage = await getTrackedCartUiMessage(interaction.user.id, interaction.channel);
@@ -1898,7 +2701,6 @@ client.on("interactionCreate", async (interaction) => {
 
           clearTrackedCartUiMessage(interaction.user.id);
           clearTrackedShopSessionChannel(interaction.user.id);
-          await clearCart(interaction.user.id);
 
           if (trackedCartMessage) {
             await trackedCartMessage.delete().catch(() => {});
@@ -1940,7 +2742,7 @@ client.on("interactionCreate", async (interaction) => {
           return interaction.reply({ content: "Staff only.", ephemeral: true });
         }
 
-        await pool.query(`UPDATE orders SET status='paid' WHERE order_id=$1`, [orderId]);
+        await pool.query(`UPDATE orders SET status = 'paid' WHERE order_id = $1`, [orderId]);
 
         await interaction.update({
           content: `✅ Order #${orderId} marked as paid.`,
@@ -1960,7 +2762,7 @@ client.on("interactionCreate", async (interaction) => {
           return interaction.reply({ content: "Staff only.", ephemeral: true });
         }
 
-        await pool.query(`UPDATE orders SET status='dispatched' WHERE order_id=$1`, [orderId]);
+        await pool.query(`UPDATE orders SET status = 'dispatched' WHERE order_id = $1`, [orderId]);
 
         await interaction.update({
           content: `📦 Order #${orderId} marked as dispatched.`,
@@ -1981,55 +2783,45 @@ client.on("interactionCreate", async (interaction) => {
         }
 
         const orderRes = await pool.query(
-          `SELECT status, user_id FROM orders WHERE order_id=$1`,
+          `SELECT status, user_id FROM orders WHERE order_id = $1`,
           [orderId]
         );
 
         if (!orderRes.rows.length) {
-          return interaction.reply({
-            content: "Order not found.",
-            ephemeral: true,
-          });
+          return interaction.reply({ content: "Order not found.", ephemeral: true });
         }
 
         const currentStatus = orderRes.rows[0].status;
         const customerUserId = orderRes.rows[0].user_id;
 
         if (currentStatus === "cancelled") {
-          return interaction.reply({
-            content: "This order is already cancelled.",
-            ephemeral: true,
-          });
+          return interaction.reply({ content: "This order is already cancelled.", ephemeral: true });
         }
 
         if (currentStatus === "dispatched" || currentStatus === "completed") {
-          return interaction.reply({
-            content: "Dispatched or completed orders cannot be cancelled.",
-            ephemeral: true,
-          });
+          return interaction.reply({ content: "Dispatched or completed orders cannot be cancelled.", ephemeral: true });
         }
 
         const itemsRes = await pool.query(
-          `SELECT sku, qty FROM order_items WHERE order_id=$1`,
+          `SELECT product_id, qty FROM order_items WHERE order_id = $1`,
           [orderId]
         );
 
         for (const item of itemsRes.rows) {
-          await pool.query(
-            `
-            UPDATE stock_items
-            SET stock_qty = stock_qty + $1,
-                updated_at = NOW()
-            WHERE sku = $2
-            `,
-            [item.qty, item.sku]
-          );
+          if (item.product_id) {
+            await pool.query(
+              `
+              UPDATE shop_products
+              SET stock_qty = stock_qty + $1,
+                  updated_at = NOW()
+              WHERE product_id = $2
+              `,
+              [item.qty, item.product_id]
+            );
+          }
         }
 
-        await pool.query(
-          `UPDATE orders SET status='cancelled' WHERE order_id=$1`,
-          [orderId]
-        );
+        await pool.query(`UPDATE orders SET status = 'cancelled' WHERE order_id = $1`, [orderId]);
 
         await interaction.update({
           content: `❌ Order #${orderId} has been cancelled.`,
@@ -2037,9 +2829,7 @@ client.on("interactionCreate", async (interaction) => {
           components: staffReceiptControls(orderId, "cancelled"),
         });
 
-        await interaction.channel.send(
-          `❌ Order #${orderId} has been cancelled. Stock has been restored.`
-        );
+        await interaction.channel.send(`❌ Order #${orderId} has been cancelled. Stock has been restored.`);
 
         try {
           await interaction.channel.permissionOverwrites.edit(customerUserId, {
@@ -2058,32 +2848,20 @@ client.on("interactionCreate", async (interaction) => {
           return interaction.reply({ content: "Staff only.", ephemeral: true });
         }
 
-        const orderRes = await pool.query(
-          `SELECT status FROM orders WHERE order_id=$1`,
-          [orderId]
-        );
+        const orderRes = await pool.query(`SELECT status FROM orders WHERE order_id = $1`, [orderId]);
 
         if (!orderRes.rows.length) {
-          return interaction.reply({
-            content: "Order not found.",
-            ephemeral: true,
-          });
+          return interaction.reply({ content: "Order not found.", ephemeral: true });
         }
 
         const currentStatus = orderRes.rows[0].status;
 
         if (currentStatus === "cancelled") {
-          return interaction.reply({
-            content: "Cancelled orders cannot be completed.",
-            ephemeral: true,
-          });
+          return interaction.reply({ content: "Cancelled orders cannot be completed.", ephemeral: true });
         }
 
         if (currentStatus === "completed") {
-          return interaction.reply({
-            content: "This order is already completed.",
-            ephemeral: true,
-          });
+          return interaction.reply({ content: "This order is already completed.", ephemeral: true });
         }
 
         if (currentStatus !== "dispatched") {
@@ -2093,10 +2871,7 @@ client.on("interactionCreate", async (interaction) => {
           });
         }
 
-        await pool.query(
-          `UPDATE orders SET status='completed' WHERE order_id=$1`,
-          [orderId]
-        );
+        await pool.query(`UPDATE orders SET status = 'completed' WHERE order_id = $1`, [orderId]);
 
         await interaction.update({
           content: `✅ Order #${orderId} marked as completed. Closing this channel in 5 seconds...`,
@@ -2104,9 +2879,7 @@ client.on("interactionCreate", async (interaction) => {
           components: staffReceiptControls(orderId, "completed"),
         });
 
-        await interaction.channel.send(
-          `✅ Order #${orderId} is complete. This channel will now close.`
-        );
+        await interaction.channel.send(`✅ Order #${orderId} is complete. This channel will now close.`);
 
         setTimeout(async () => {
           try {
@@ -2121,43 +2894,20 @@ client.on("interactionCreate", async (interaction) => {
     }
 
     if (interaction.isStringSelectMenu()) {
-      const { customId } = interaction;
+      const customIdBase = interaction.customId.split(":")[0];
 
-      if (customId === "staff_stock_select_category") {
-        if (!isStaff(interaction.member)) {
-          return interaction.reply({ content: "Staff only.", ephemeral: true });
-        }
-        if (!isStaffChannel(interaction)) {
-          return interaction.reply({ content: "Use this in the staff-only channel.", ephemeral: true });
-        }
-
-        const category = interaction.values[0];
-
-        return interaction.update({
-          content: `Category selected: **${category}**\nNow choose an item:`,
-          components: staffStockItemComponents(category),
-        });
-      }
-
-      if (customId.startsWith("staff_stock_select_item:")) {
-        if (!isStaff(interaction.member)) {
-          return interaction.reply({ content: "Staff only.", ephemeral: true });
-        }
-        if (!isStaffChannel(interaction)) {
-          return interaction.reply({ content: "Use this in the staff-only channel.", ephemeral: true });
-        }
-
-        const [, category] = customId.split(":");
-        const sku = interaction.values[0];
-
-        return interaction.showModal(staffStockQtyModal(category, sku));
-      }
-
-      if (customId === "select_category") {
+      if (customIdBase === "select_category") {
         trackCartUiMessage(interaction.user.id, interaction.channel.id, interaction.message.id);
 
-        const category = interaction.values[0];
-        const itemComponents = await itemSelectComponents(category);
+        const categoryId = Number(interaction.values[0]);
+        const itemComponents = await itemSelectComponents(categoryId);
+
+        if (!itemComponents.length) {
+          return interaction.update({
+            content: "That category currently has no active products.",
+            components: await categorySelectComponents(),
+          });
+        }
 
         return interaction.update({
           content: "Now choose an item:",
@@ -2165,25 +2915,142 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
-      if (customId.startsWith("select_item:")) {
+      if (customIdBase === "select_item") {
         trackCartUiMessage(interaction.user.id, interaction.channel.id, interaction.message.id);
 
-        const [, category] = customId.split(":");
-        const sku = interaction.values[0];
+        const productId = Number(interaction.values[0]);
+        const product = await getProductById(productId);
 
-        const stockQty = await getStockForSku(sku);
-        if (stockQty <= 0) {
+        if (!product || !product.is_active) {
           return interaction.update({
-            content: "That item is out of stock.",
-            components: categorySelectComponents(),
+            content: "That item is no longer available.",
+            components: await categorySelectComponents(),
           });
         }
 
-        const qtyComponents = await qtyButtonsComponents(category, sku);
+        if (Number(product.stock_qty || 0) <= 0) {
+          return interaction.update({
+            content: "That item is out of stock.",
+            components: await categorySelectComponents(),
+          });
+        }
+
+        const qtyComponents = await qtyButtonsComponents(productId);
 
         return interaction.update({
-          content: `Selected item — how many? (In stock: ${stockQty})`,
+          content: `Selected item — how many? (In stock: ${product.stock_qty})`,
           components: qtyComponents,
+        });
+      }
+
+      if (customIdBase === "staff_pick_stock_product") {
+        if (!isStaff(interaction.member)) {
+          return interaction.reply({ content: "Staff only.", ephemeral: true });
+        }
+
+        const productId = Number(interaction.values[0]);
+        const product = await getProductById(productId);
+
+        if (!product) {
+          return interaction.reply({ content: "Product not found.", ephemeral: true });
+        }
+
+        return interaction.showModal(changeStockModal(product.product_id, product.stock_qty, product.name));
+      }
+
+      if (customIdBase === "staff_pick_rename_category") {
+        if (!isStaff(interaction.member)) {
+          return interaction.reply({ content: "Staff only.", ephemeral: true });
+        }
+
+        const categoryId = Number(interaction.values[0]);
+        const category = await getCategoryById(categoryId);
+
+        if (!category) {
+          return interaction.reply({ content: "Category not found.", ephemeral: true });
+        }
+
+        return interaction.showModal(renameCategoryModal(category.category_id, category.name));
+      }
+
+      if (customIdBase === "staff_pick_archive_category") {
+        if (!isStaff(interaction.member)) {
+          return interaction.reply({ content: "Staff only.", ephemeral: true });
+        }
+
+        const categoryId = Number(interaction.values[0]);
+        const archived = await archiveCategory(categoryId);
+
+        if (!archived) {
+          return interaction.reply({ content: "Category not found.", ephemeral: true });
+        }
+
+        return interaction.reply({
+          content: `✅ Category **${archived.name}** archived.`,
+          ephemeral: true,
+        });
+      }
+
+      if (customIdBase === "staff_pick_add_product_category") {
+        if (!isStaff(interaction.member)) {
+          return interaction.reply({ content: "Staff only.", ephemeral: true });
+        }
+
+        const categoryId = Number(interaction.values[0]);
+        const category = await getCategoryById(categoryId);
+
+        if (!category || !category.is_active) {
+          return interaction.reply({ content: "Category not found.", ephemeral: true });
+        }
+
+        return interaction.showModal(addProductModal(category.category_id, category.name));
+      }
+
+      if (customIdBase === "staff_pick_rename_product") {
+        if (!isStaff(interaction.member)) {
+          return interaction.reply({ content: "Staff only.", ephemeral: true });
+        }
+
+        const productId = Number(interaction.values[0]);
+        const product = await getProductById(productId);
+
+        if (!product) {
+          return interaction.reply({ content: "Product not found.", ephemeral: true });
+        }
+
+        return interaction.showModal(renameProductModal(product.product_id, product.name));
+      }
+
+      if (customIdBase === "staff_pick_change_price_product") {
+        if (!isStaff(interaction.member)) {
+          return interaction.reply({ content: "Staff only.", ephemeral: true });
+        }
+
+        const productId = Number(interaction.values[0]);
+        const product = await getProductById(productId);
+
+        if (!product) {
+          return interaction.reply({ content: "Product not found.", ephemeral: true });
+        }
+
+        return interaction.showModal(changePriceModal(product.product_id, product.price_pence));
+      }
+
+      if (customIdBase === "staff_pick_archive_product") {
+        if (!isStaff(interaction.member)) {
+          return interaction.reply({ content: "Staff only.", ephemeral: true });
+        }
+
+        const productId = Number(interaction.values[0]);
+        const archived = await archiveProduct(productId);
+
+        if (!archived) {
+          return interaction.reply({ content: "Product not found.", ephemeral: true });
+        }
+
+        return interaction.reply({
+          content: `✅ Product **${archived.name}** (${archived.sku}) archived.`,
+          ephemeral: true,
         });
       }
     }
@@ -2202,11 +3069,14 @@ client.on("interactionCreate", async (interaction) => {
           return interaction.reply({ content: "All fields are required.", ephemeral: true });
         }
 
-        await upsertProfile(interaction.user.id, full_name, email, phone, { full_address, country });
+        await upsertProfile(interaction.user.id, full_name, email, phone, {
+          full_address,
+          country,
+        });
 
         const payload = {
           content: "✅ Details saved. Choose a category:",
-          components: categorySelectComponents(),
+          components: await categorySelectComponents(),
         };
 
         const { channel } = await sendOrEditCartUiMessage(interaction, payload, { keepReply: true });
@@ -2307,79 +3177,32 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
-      if (customId.startsWith("staff_stock_qty_modal:")) {
-        if (!isStaff(interaction.member)) {
-          return interaction.reply({ content: "Staff only.", ephemeral: true });
-        }
-        if (!isStaffChannel(interaction)) {
-          return interaction.reply({ content: "Use this in the staff-only channel.", ephemeral: true });
-        }
-
-        const [, category, sku] = customId.split(":");
-        const qtyRaw = interaction.fields.getTextInputValue("stock_qty")?.trim();
-        const qty = parseInt(qtyRaw, 10);
-
-        if (!Number.isFinite(qty) || qty < 0) {
-          return interaction.reply({
-            content: "Enter a valid stock quantity of 0 or more.",
-            ephemeral: true,
-          });
-        }
-
-        const item = (CATALOG[category] || []).find((x) => x.sku === sku);
-        if (!item) {
-          return interaction.reply({
-            content: "Item not found.",
-            ephemeral: true,
-          });
-        }
-
-        await pool.query(
-          `UPDATE stock_items SET stock_qty=$1, updated_at=NOW() WHERE sku=$2`,
-          [qty, sku]
-        );
-
-        return interaction.reply({
-          content: `✅ Stock updated for **${item.name}** (${sku}) → ${qty}`,
-          ephemeral: true,
-        });
-      }
-
       if (customId === "staff_orderlookup_modal") {
         if (!isStaff(interaction.member)) {
           return interaction.reply({ content: "Staff only.", ephemeral: true });
-        }
-        if (!isStaffChannel(interaction)) {
-          return interaction.reply({ content: "Use this in the staff-only channel.", ephemeral: true });
         }
 
         const orderIdRaw = interaction.fields.getTextInputValue("lookup_order_id")?.trim();
         const orderId = parseInt(orderIdRaw, 10);
 
         if (!Number.isFinite(orderId) || orderId <= 0) {
-          return interaction.reply({
-            content: "Enter a valid order ID.",
-            ephemeral: true,
-          });
+          return interaction.reply({ content: "Enter a valid order ID.", ephemeral: true });
         }
 
-        const orderRes = await pool.query(`SELECT * FROM orders WHERE order_id=$1`, [orderId]);
+        const orderRes = await pool.query(`SELECT * FROM orders WHERE order_id = $1`, [orderId]);
         if (!orderRes.rows.length) {
-          return interaction.reply({
-            content: "Order not found.",
-            ephemeral: true,
-          });
+          return interaction.reply({ content: "Order not found.", ephemeral: true });
         }
 
         const order = orderRes.rows[0];
 
         const itemsRes = await pool.query(
-          `SELECT name, qty, price_pence FROM order_items WHERE order_id=$1 ORDER BY id ASC`,
+          `SELECT name, qty, price_pence FROM order_items WHERE order_id = $1 ORDER BY id ASC`,
           [orderId]
         );
 
         const itemLines = itemsRes.rows.map(
-          (it) => `• ${it.name} × ${it.qty} — ${money(it.qty * it.price_pence)}`
+          (it) => `• ${it.name} × ${it.qty} — ${money(Number(it.qty) * Number(it.price_pence))}`
         );
 
         const embed = new EmbedBuilder()
@@ -2403,9 +3226,6 @@ client.on("interactionCreate", async (interaction) => {
         if (!isStaff(interaction.member)) {
           return interaction.reply({ content: "Staff only.", ephemeral: true });
         }
-        if (!isStaffChannel(interaction)) {
-          return interaction.reply({ content: "Use this in the staff-only channel.", ephemeral: true });
-        }
 
         const codeRaw = interaction.fields.getTextInputValue("discount_code")?.trim();
         const percentRaw = interaction.fields.getTextInputValue("discount_percent")?.trim();
@@ -2424,7 +3244,7 @@ client.on("interactionCreate", async (interaction) => {
         await createDiscountCodeRecord(code, percent);
 
         return interaction.reply({
-          content: `✅ Discount code **${code}** created/updated at ${percent}% and set active.`,
+          content: `✅ Discount code **${code}** created or updated at ${percent}% and set active.`,
           ephemeral: true,
         });
       }
@@ -2433,15 +3253,11 @@ client.on("interactionCreate", async (interaction) => {
         if (!isStaff(interaction.member)) {
           return interaction.reply({ content: "Staff only.", ephemeral: true });
         }
-        if (!isStaffChannel(interaction)) {
-          return interaction.reply({ content: "Use this in the staff-only channel.", ephemeral: true });
-        }
 
         const codeRaw = interaction.fields.getTextInputValue("discount_code")?.trim();
         const stateRaw = interaction.fields.getTextInputValue("discount_active")?.trim().toLowerCase();
 
         const code = normalizeDiscountCode(codeRaw);
-
         if (!code) {
           return interaction.reply({ content: "Enter a valid code.", ephemeral: true });
         }
@@ -2450,18 +3266,12 @@ client.on("interactionCreate", async (interaction) => {
         if (stateRaw === "active") active = true;
         else if (stateRaw === "inactive") active = false;
         else {
-          return interaction.reply({
-            content: "Type either active or inactive.",
-            ephemeral: true,
-          });
+          return interaction.reply({ content: "Type either active or inactive.", ephemeral: true });
         }
 
         const updated = await setDiscountCodeActiveState(code, active);
         if (!updated) {
-          return interaction.reply({
-            content: "That discount code was not found.",
-            ephemeral: true,
-          });
+          return interaction.reply({ content: "That discount code was not found.", ephemeral: true });
         }
 
         return interaction.reply({
@@ -2470,8 +3280,138 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
+      if (customId === "staff_add_category_modal") {
+        if (!isStaff(interaction.member)) {
+          return interaction.reply({ content: "Staff only.", ephemeral: true });
+        }
+
+        const categoryName = interaction.fields.getTextInputValue("category_name")?.trim();
+        const created = await createCategory(categoryName);
+
+        return interaction.reply({
+          content: `✅ Category **${created.name}** created.`,
+          ephemeral: true,
+        });
+      }
+
+      if (customId.startsWith("staff_rename_category_modal:")) {
+        if (!isStaff(interaction.member)) {
+          return interaction.reply({ content: "Staff only.", ephemeral: true });
+        }
+
+        const [, categoryIdStr] = customId.split(":");
+        const categoryId = Number(categoryIdStr);
+        const newName = interaction.fields.getTextInputValue("category_name")?.trim();
+
+        const updated = await renameCategory(categoryId, newName);
+        if (!updated) {
+          return interaction.reply({ content: "Category not found.", ephemeral: true });
+        }
+
+        return interaction.reply({
+          content: `✅ Category renamed to **${updated.name}**.`,
+          ephemeral: true,
+        });
+      }
+
+      if (customId.startsWith("staff_add_product_modal:")) {
+        if (!isStaff(interaction.member)) {
+          return interaction.reply({ content: "Staff only.", ephemeral: true });
+        }
+
+        const [, categoryIdStr] = customId.split(":");
+        const categoryId = Number(categoryIdStr);
+
+        const sku = interaction.fields.getTextInputValue("sku")?.trim();
+        const name = interaction.fields.getTextInputValue("name")?.trim();
+        const priceRaw = interaction.fields.getTextInputValue("price_pence")?.trim();
+        const stockRaw = interaction.fields.getTextInputValue("stock_qty")?.trim();
+        const defaultSize = interaction.fields.getTextInputValue("default_size")?.trim();
+
+        const pricePence = parseInt(priceRaw, 10);
+        const stockQty = parseInt(stockRaw, 10);
+
+        const created = await createProduct({
+          categoryId,
+          sku,
+          name,
+          pricePence,
+          stockQty,
+          defaultSize,
+          defaultColor: DEFAULT_COLOR,
+        });
+
+        return interaction.reply({
+          content: `✅ Product **${created.name}** (${created.sku}) created.`,
+          ephemeral: true,
+        });
+      }
+
+      if (customId.startsWith("staff_rename_product_modal:")) {
+        if (!isStaff(interaction.member)) {
+          return interaction.reply({ content: "Staff only.", ephemeral: true });
+        }
+
+        const [, productIdStr] = customId.split(":");
+        const productId = Number(productIdStr);
+        const newName = interaction.fields.getTextInputValue("product_name")?.trim();
+
+        const updated = await updateProductName(productId, newName);
+        if (!updated) {
+          return interaction.reply({ content: "Product not found.", ephemeral: true });
+        }
+
+        return interaction.reply({
+          content: `✅ Product renamed to **${updated.name}**.`,
+          ephemeral: true,
+        });
+      }
+
+      if (customId.startsWith("staff_change_price_modal:")) {
+        if (!isStaff(interaction.member)) {
+          return interaction.reply({ content: "Staff only.", ephemeral: true });
+        }
+
+        const [, productIdStr] = customId.split(":");
+        const productId = Number(productIdStr);
+        const priceRaw = interaction.fields.getTextInputValue("price_pence")?.trim();
+        const pricePence = parseInt(priceRaw, 10);
+
+        const updated = await updateProductPrice(productId, pricePence);
+        if (!updated) {
+          return interaction.reply({ content: "Product not found.", ephemeral: true });
+        }
+
+        return interaction.reply({
+          content: `✅ Price updated for **${updated.name}** to ${money(updated.price_pence)}.`,
+          ephemeral: true,
+        });
+      }
+
+      if (customId.startsWith("staff_change_stock_modal:")) {
+        if (!isStaff(interaction.member)) {
+          return interaction.reply({ content: "Staff only.", ephemeral: true });
+        }
+
+        const [, productIdStr] = customId.split(":");
+        const productId = Number(productIdStr);
+        const stockRaw = interaction.fields.getTextInputValue("stock_qty")?.trim();
+        const stockQty = parseInt(stockRaw, 10);
+
+        const updated = await updateProductStock(productId, stockQty);
+        if (!updated) {
+          return interaction.reply({ content: "Product not found.", ephemeral: true });
+        }
+
+        return interaction.reply({
+          content: `✅ Stock updated for **${updated.name}** (${updated.sku}) → ${updated.stock_qty}.`,
+          ephemeral: true,
+        });
+      }
+
       if (customId.startsWith("qty_other_modal:")) {
-        const [, category, sku] = customId.split(":");
+        const [, productIdStr] = customId.split(":");
+        const productId = Number(productIdStr);
         const qtyRaw = interaction.fields.getTextInputValue("qty");
         const qty = parseInt(qtyRaw, 10);
 
@@ -2479,31 +3419,26 @@ client.on("interactionCreate", async (interaction) => {
           return interaction.reply({ content: "Please enter a valid quantity (number > 0).", ephemeral: true });
         }
 
-        const item = (CATALOG[category] || []).find((x) => x.sku === sku);
-        if (!item) return interaction.reply({ content: "Item not found.", ephemeral: true });
+        const product = await getProductById(productId);
+        if (!product || !product.is_active) {
+          return interaction.reply({ content: "Item not found.", ephemeral: true });
+        }
 
-        const stockQty = await getStockForSku(item.sku);
-        if (qty > stockQty) {
+        if (qty > Number(product.stock_qty || 0)) {
           return interaction.reply({
-            content: `Only ${stockQty} in stock for ${item.name}.`,
+            content: `Only ${product.stock_qty} in stock for ${product.name}.`,
             ephemeral: true,
           });
         }
 
-        await addCartItem(interaction.user.id, {
-          sku: item.sku,
-          name: item.name,
-          size: DEFAULT_SIZE,
-          color: DEFAULT_COLOR,
-          qty,
-          price_pence: item.price_pence,
-        });
+        await addCartItem(interaction.user.id, product, qty);
 
         const content = await buildCartMessage(interaction.user.id);
         await sendOrEditCartUiMessage(interaction, {
           content,
           components: cartActionsComponents(),
         });
+
         return;
       }
 
@@ -2543,6 +3478,7 @@ client.on("interactionCreate", async (interaction) => {
           content,
           components: cartActionsComponents(),
         });
+
         return;
       }
     }
@@ -2551,8 +3487,9 @@ client.on("interactionCreate", async (interaction) => {
 
     if (!interaction.isRepliable()) return;
 
+    const msg = `❌ Error: ${err.message || "Unknown error"}`;
+
     try {
-      const msg = `❌ Error: ${err.message || "Unknown error"}`;
       if (deferred || interaction.deferred) {
         await interaction.editReply(msg);
       } else if (interaction.replied) {
