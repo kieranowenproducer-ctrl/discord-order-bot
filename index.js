@@ -1296,8 +1296,6 @@ function staffReceiptControls(orderId, status = "pending") {
 
 /* ------------------------------ INTERACTIONS ----------------------------- */
 
-/* ------------------------------ INTERACTIONS ----------------------------- */
-
 const CART_UI_MESSAGES = new Map();
 
 async function getTrackedCartUiMessage(userId, channel) {
