@@ -1277,19 +1277,42 @@ function staffReceiptControls(orderId, status = "pending") {
         .setCustomId(`staff_mark_paid:${orderId}`)
         .setLabel("Mark as paid ✅")
         .setStyle(ButtonStyle.Success)
-        .setDisabled(status === "paid" || status === "dispatched" || status === "cancelled"),
+        .setDisabled(
+          status === "paid" ||
+          status === "dispatched" ||
+          status === "cancelled" ||
+          status === "completed"
+        ),
 
       new ButtonBuilder()
         .setCustomId(`staff_mark_dispatched:${orderId}`)
         .setLabel("Mark as dispatched 📦")
         .setStyle(ButtonStyle.Primary)
-        .setDisabled(status === "dispatched" || status === "cancelled"),
+        .setDisabled(
+          status === "dispatched" ||
+          status === "cancelled" ||
+          status === "completed"
+        ),
 
       new ButtonBuilder()
         .setCustomId(`staff_cancel_order:${orderId}`)
         .setLabel("Cancel Order ❌")
         .setStyle(ButtonStyle.Danger)
-        .setDisabled(status === "dispatched" || status === "cancelled")
+        .setDisabled(
+          status === "dispatched" ||
+          status === "cancelled" ||
+          status === "completed"
+        ),
+
+      new ButtonBuilder()
+        .setCustomId(`staff_complete_order:${orderId}`)
+        .setLabel("Complete & Close ✅")
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(
+          status === "cancelled" ||
+          status === "completed" ||
+          status !== "dispatched"
+        )
     ),
   ];
 }
