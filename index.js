@@ -2206,9 +2206,19 @@ client.on("interactionCreate", async (interaction) => {
 
         const { channel } = await sendOrEditCartUiMessage(interaction, payload, { keepReply: true });
 
-        return interaction.editReply({
+        await interaction.editReply({
           content: `✅ Details saved. Continue your order here: <#${channel.id}>`,
         });
+
+        setTimeout(async () => {
+          try {
+            await interaction.deleteReply();
+          } catch (err) {
+            console.error("Failed to delete temporary shop redirect reply:", err);
+          }
+        }, 4000);
+
+        return;
       }
 
       if (customId === "verify_submit_modal") {
