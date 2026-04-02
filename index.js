@@ -1904,11 +1904,16 @@ client.on("interactionCreate", async (interaction) => {
             await trackedCartMessage.delete().catch(() => {});
           }
 
-          await interaction.reply({
-            content:
-              `✅ Order submitted! Your private receipt channel is: <#${receiptChannel.id}>\n` +
-              `This private shopping channel will close in 5 seconds.`,
-            ephemeral: true,
+          const continueRow = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+              .setLabel("Continue to Receipt")
+              .setStyle(ButtonStyle.Link)
+              .setURL(`https://discord.com/channels/${interaction.guild.id}/${receiptChannel.id}`)
+          );
+
+          await interaction.channel.send({
+            content: `✅ Order submitted. Your receipt channel is ready.\nThis private shopping channel will close in 20 seconds.`,
+            components: [continueRow],
           });
 
           const channelToDelete = trackedShopChannel || interaction.channel;
@@ -1919,7 +1924,7 @@ client.on("interactionCreate", async (interaction) => {
             } catch (err) {
               console.error("Failed to delete shop session channel:", err);
             }
-          }, 5000);
+          }, 20000);
 
           return;
         } finally {
