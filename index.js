@@ -1296,6 +1296,11 @@ function staffReceiptControls(orderId, status = "pending") {
 
 /* ------------------------------ INTERACTIONS ----------------------------- */
 
+const client = new Client({
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
+  partials: [Partials.Channel],
+});
+
 const CART_UI_MESSAGES = new Map();
 
 async function getTrackedCartUiMessage(userId, channel) {
