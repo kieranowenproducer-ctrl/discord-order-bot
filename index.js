@@ -1985,6 +1985,40 @@ function trackShopSessionChannel(userId, channelId) {
   SHOP_SESSION_CHANNELS.set(userId, channelId);
 }
 
+async function closeShopSession(interaction, options = {}) {
+  const {
+    message = "This private shopping channel will now close.",
+    delayMs = 3000,
+  } = options;
+
+  const trackedCartMessage = await getTrackedCartUiMessage(interaction.user.id, interaction.channel);
+  const trackedShopChannel = await getTrackedShopSessionChannel(interaction.guild, interaction.user.id);
+
+  clearTrackedCartUiMessage(interaction.user.id);
+  clearTrackedShopSessionChannel(interaction.user.id);
+
+  try {
+    if (trackedCartMessage && trackedCartMessage.id !== interaction.message?.id) {
+      await trackedCartMessage.delete().catch(() => {});
+    }
+  } catch {}
+
+  await interaction.update({
+    content: message,
+    components: [],
+  });
+
+  const channelToDelete = trackedShopChannel || interaction.channel;
+
+  setTimeout(async () => {
+    try {
+      await channelToDelete.delete("Shop session closed");
+    } catch (err) {
+      console.error("Failed to delete shop session channel:", err);
+    }
+  }, delayMs);
+}
+
 function clearTrackedShopSessionChannel(userId) {
   SHOP_SESSION_CHANNELS.delete(userId);
 }
@@ -2591,18 +2625,19 @@ client.on("interactionCreate", async (interaction) => {
         return interaction.showModal(discountCodeModal());
       }
 
-      if (customId === "cart_clear") {
-        trackCartUiMessage(interaction.user.id, interaction.channel.id, interaction.message.id);
-        await clearCart(interaction.user.id);
+if (customId === "cart_clear") {
+  trackCartUiMessage(interaction.user.id, interaction.channel.id, interaction.message.id);
 
-        return interaction.update({
-          content:
-            "🗑️ **Basket empty**\n\n" +
-            "Your cart has been cleared.\n" +
-            "Choose a category below to start a new order:",
-          components: await categorySelectComponents(),
-        });
-      }
+  await clearCart(interaction.user.id);
+
+  return closeShopSession(interaction, {
+    message:
+      "🗑️ **Basket cleared**\n\n" +
+      "Your cart has been cleared successfully.\n" +
+      "This private shopping channel will close in 3 seconds.",
+    delayMs: 3000,
+  });
+}
 
 if (customId === "cart_submit") {
   trackCartUiMessage(interaction.user.id, interaction.channel.id, interaction.message.id);
@@ -2679,39 +2714,27 @@ if (customId === "cart_submit") {
       components: staffReceiptControls(orderResult.orderId, "pending"),
     });
 
-    const trackedCartMessage = await getTrackedCartUiMessage(interaction.user.id, interaction.channel);
-    const trackedShopChannel = await getTrackedShopSessionChannel(interaction.guild, interaction.user.id);
+const continueRow = new ActionRowBuilder().addComponents(
+  new ButtonBuilder()
+    .setLabel("Continue to Receipt")
+    .setStyle(ButtonStyle.Link)
+    .setURL(`https://discord.com/channels/${interaction.guild.id}/${receiptChannel.id}`)
+);
 
-    clearTrackedCartUiMessage(interaction.user.id);
-    clearTrackedShopSessionChannel(interaction.user.id);
+await interaction.channel.send({
+  content: `✅ Order submitted. Your receipt channel is ready.\nThis private shopping channel will close in 20 seconds.`,
+  components: [continueRow],
+});
 
-    if (trackedCartMessage) {
-      await trackedCartMessage.delete().catch(() => {});
-    }
+await closeShopSession(interaction, {
+  message:
+    "✅ **Order submitted**\n\n" +
+    "Your receipt channel is ready.\n" +
+    "This private shopping channel will close in 20 seconds.",
+  delayMs: 20000,
+});
 
-    const continueRow = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setLabel("Continue to Receipt")
-        .setStyle(ButtonStyle.Link)
-        .setURL(`https://discord.com/channels/${interaction.guild.id}/${receiptChannel.id}`)
-    );
-
-    await interaction.channel.send({
-      content: `✅ Order submitted. Your receipt channel is ready.\nThis private shopping channel will close in 20 seconds.`,
-      components: [continueRow],
-    });
-
-    const channelToDelete = trackedShopChannel || interaction.channel;
-
-    setTimeout(async () => {
-      try {
-        await channelToDelete.delete("Shop session completed");
-      } catch (err) {
-        console.error("Failed to delete shop session channel:", err);
-      }
-    }, 20000);
-
-    return;
+return;
   } finally {
     clearSubmitLock(interaction.user.id);
   }
