@@ -2224,7 +2224,7 @@ client.on("interactionCreate", async (interaction) => {
           } catch (err) {
             console.error("Failed to delete temporary shop redirect reply:", err);
           }
-        }, 4000);
+        }, 20000);
 
         return;
       }
