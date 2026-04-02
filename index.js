@@ -1447,20 +1447,37 @@ function clearShopSessionTimeout(userId) {
   }
 }
 
-async function destroyShopSession(guild, userId, reason = "Shop session closed") {
+async function destroyShopSessionByChannel(channel, userId, reason = "Shop session closed") {
   clearShopSessionTimeout(userId);
-
-  const channel = await getTrackedShopSessionChannel(guild, userId).catch(() => null);
-
   clearTrackedCartUiMessage(userId);
   clearTrackedShopSessionChannel(userId);
 
-  await clearCart(userId).catch(() => {});
-  await clearCartDiscount(userId).catch(() => {});
+  await clearCart(userId).catch((err) => {
+    console.error("Failed to clear cart during shop session cleanup:", err);
+  });
+
+  await clearCartDiscount(userId).catch((err) => {
+    console.error("Failed to clear cart discount during shop session cleanup:", err);
+  });
 
   if (channel) {
-    await channel.delete(reason).catch(() => {});
+    try {
+      await channel.delete(reason);
+    } catch (err) {
+      console.error("Failed to delete shop session channel:", err);
+    }
   }
+}
+
+async function destroyShopSession(guild, userId, reason = "Shop session closed") {
+  clearShopSessionTimeout(userId);
+
+  const channel = await getTrackedShopSessionChannel(guild, userId).catch((err) => {
+    console.error("Failed to fetch tracked shop session channel:", err);
+    return null;
+  });
+
+  await destroyShopSessionByChannel(channel, userId, reason);
 }
 
 function resetShopSessionTimeout(guild, userId) {
@@ -1829,7 +1846,7 @@ client.on("interactionCreate", async (interaction) => {
         });
 
         setTimeout(async () => {
-          await destroyShopSession(interaction.guild, interaction.user.id, "Shop session closed by user");
+          await destroyShopSessionByChannel(interaction.channel, interaction.user.id, "Shop session closed by user");
         }, 1500);
 
         return;
@@ -1921,7 +1938,7 @@ client.on("interactionCreate", async (interaction) => {
         });
 
         setTimeout(async () => {
-          await destroyShopSession(interaction.guild, interaction.user.id, "Cart cleared and shop closed");
+          await destroyShopSessionByChannel(interaction.channel, interaction.user.id, "Cart cleared and shop closed");
         }, 1500);
 
         return;
@@ -2085,8 +2102,16 @@ client.on("interactionCreate", async (interaction) => {
             components: [],
           });
 
+          clearShopSessionTimeout(interaction.user.id);
+          clearTrackedCartUiMessage(interaction.user.id);
+          clearTrackedShopSessionChannel(interaction.user.id);
+
           setTimeout(async () => {
-            await destroyShopSession(interaction.guild, interaction.user.id, "Shop session completed");
+            try {
+              await interaction.channel.delete("Shop session completed");
+            } catch (err) {
+              console.error("Failed to delete completed shop session channel:", err);
+            }
           }, 2000);
 
           return;
@@ -2744,7 +2769,7 @@ client.on("interactionCreate", async (interaction) => {
 
 /* ------------------------------- STARTUP ------------------------------- */
 
-client.once("ready", () => {
+client.once("clientReady", () => {
   console.log("✅ Logged in as", client.user.tag);
   console.log("✅ Slash commands registered");
 });
