@@ -1319,12 +1319,15 @@ function staffReceiptControls(orderId, status = "pending") {
 
 /* ------------------------------ INTERACTIONS ----------------------------- */
 
+/* ------------------------------ INTERACTIONS ----------------------------- */
+
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
   partials: [Partials.Channel],
 });
 
 const CART_UI_MESSAGES = new Map();
+const SHOP_SESSION_CHANNELS = new Map();
 
 async function getTrackedCartUiMessage(userId, channel) {
   const tracked = CART_UI_MESSAGES.get(userId);
@@ -1348,21 +1351,86 @@ function clearTrackedCartUiMessage(userId) {
   CART_UI_MESSAGES.delete(userId);
 }
 
-async function sendOrEditCartUiMessage(interaction, payload) {
-  await interaction.deferReply({ ephemeral: true });
+async function getTrackedShopSessionChannel(guild, userId) {
+  const trackedChannelId = SHOP_SESSION_CHANNELS.get(userId);
+  if (!trackedChannelId) return null;
 
-  const existing = await getTrackedCartUiMessage(interaction.user.id, interaction.channel);
-
-  if (existing) {
-    await existing.edit(payload);
-    await interaction.deleteReply().catch(() => {});
-    return existing;
+  const channel = await guild.channels.fetch(trackedChannelId).catch(() => null);
+  if (!channel) {
+    SHOP_SESSION_CHANNELS.delete(userId);
+    return null;
   }
 
-  const sent = await interaction.channel.send(payload);
-  trackCartUiMessage(interaction.user.id, interaction.channel.id, sent.id);
+  return channel;
+}
+
+function trackShopSessionChannel(userId, channelId) {
+  SHOP_SESSION_CHANNELS.set(userId, channelId);
+}
+
+function clearTrackedShopSessionChannel(userId) {
+  SHOP_SESSION_CHANNELS.delete(userId);
+}
+
+async function createOrGetShopSessionChannel(guild, user) {
+  const existingTracked = await getTrackedShopSessionChannel(guild, user.id);
+  if (existingTracked) return existingTracked;
+
+  const topicMarker = `shop-session:${user.id}`;
+  const cachedExisting = guild.channels.cache.find(
+    (ch) =>
+      ch &&
+      ch.type === ChannelType.GuildText &&
+      ch.topic === topicMarker
+  );
+  if (cachedExisting) {
+    trackShopSessionChannel(user.id, cachedExisting.id);
+    return cachedExisting;
+  }
+
+  const menuChannel = await guild.channels.fetch(MENU_CHANNEL_ID).catch(() => null);
+  const parentId = menuChannel?.parentId || null;
+
+  const channel = await guild.channels.create({
+    name: safeChannelName(`shop-${user.username}`),
+    type: ChannelType.GuildText,
+    parent: parentId,
+    topic: topicMarker,
+    permissionOverwrites: [
+      { id: guild.roles.everyone.id, deny: ["ViewChannel"] },
+      { id: user.id, allow: ["ViewChannel", "SendMessages", "ReadMessageHistory"] },
+      { id: STAFF_ROLE_ID, allow: ["ViewChannel", "SendMessages", "ReadMessageHistory"] },
+      { id: guild.members.me.id, allow: ["ViewChannel", "SendMessages", "ReadMessageHistory", "ManageChannels"] },
+    ],
+  });
+
+  trackShopSessionChannel(user.id, channel.id);
+  return channel;
+}
+
+async function sendOrEditCartUiMessage(interaction, payload, options = {}) {
+  const { keepReply = false } = options;
+
+  await interaction.deferReply({ ephemeral: true });
+
+  const targetChannel = await createOrGetShopSessionChannel(interaction.guild, interaction.user);
+  const existing = await getTrackedCartUiMessage(interaction.user.id, targetChannel);
+
+  let msg;
+  if (existing) {
+    await existing.edit(payload);
+    msg = existing;
+  } else {
+    msg = await targetChannel.send(payload);
+    trackCartUiMessage(interaction.user.id, targetChannel.id, msg.id);
+  }
+
+  if (keepReply) {
+    return { message: msg, channel: targetChannel };
+  }
+
   await interaction.deleteReply().catch(() => {});
-  return sent;
+  return { message: msg, channel: targetChannel };
 }
 
 client.on("interactionCreate", async (interaction) => {
@@ -1441,6 +1509,7 @@ client.on("interactionCreate", async (interaction) => {
       const { customId } = interaction;
 
       if (customId === "open_menu") {
+        await createOrGetShopSessionChannel(interaction.guild, interaction.user);
         return interaction.showModal(shippingModal());
       }
 
@@ -1465,7 +1534,10 @@ client.on("interactionCreate", async (interaction) => {
           });
         }
 
-        const verifiedRole = guild.roles.cache.get(VERIFIED_ROLE_ID) || await guild.roles.fetch(VERIFIED_ROLE_ID).catch(() => null);
+        const verifiedRole =
+          guild.roles.cache.get(VERIFIED_ROLE_ID) ||
+          (await guild.roles.fetch(VERIFIED_ROLE_ID).catch(() => null));
+
         if (!verifiedRole) {
           return interaction.reply({
             content: "Could not find the Verified role. Check VERIFIED_ROLE_ID.",
@@ -1822,18 +1894,34 @@ client.on("interactionCreate", async (interaction) => {
           });
 
           const trackedCartMessage = await getTrackedCartUiMessage(interaction.user.id, interaction.channel);
+          const trackedShopChannel = await getTrackedShopSessionChannel(interaction.guild, interaction.user.id);
 
           clearTrackedCartUiMessage(interaction.user.id);
+          clearTrackedShopSessionChannel(interaction.user.id);
           await clearCart(interaction.user.id);
 
           if (trackedCartMessage) {
             await trackedCartMessage.delete().catch(() => {});
           }
 
-          return interaction.reply({
-            content: `✅ Order submitted! Your private receipt channel is: <#${receiptChannel.id}>`,
+          await interaction.reply({
+            content:
+              `✅ Order submitted! Your private receipt channel is: <#${receiptChannel.id}>\n` +
+              `This private shopping channel will close in 5 seconds.`,
             ephemeral: true,
           });
+
+          const channelToDelete = trackedShopChannel || interaction.channel;
+
+          setTimeout(async () => {
+            try {
+              await channelToDelete.delete("Shop session completed");
+            } catch (err) {
+              console.error("Failed to delete shop session channel:", err);
+            }
+          }, 5000);
+
+          return;
         } finally {
           clearSubmitLock(interaction.user.id);
         }
@@ -2116,8 +2204,11 @@ client.on("interactionCreate", async (interaction) => {
           components: categorySelectComponents(),
         };
 
-        await sendOrEditCartUiMessage(interaction, payload);
-        return;
+        const { channel } = await sendOrEditCartUiMessage(interaction, payload, { keepReply: true });
+
+        return interaction.editReply({
+          content: `✅ Details saved. Continue your order here: <#${channel.id}>`,
+        });
       }
 
       if (customId === "verify_submit_modal") {
