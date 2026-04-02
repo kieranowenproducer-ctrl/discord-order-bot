@@ -2756,7 +2756,3 @@ initDb()
     console.error("Startup error:", err);
     process.exit(1);
   });
-  .catch((err) => {
-    console.error("Startup error:", err);
-    process.exit(1);
-  });
