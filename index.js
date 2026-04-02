@@ -1820,19 +1820,11 @@ client.on("interactionCreate", async (interaction) => {
         const [, orderIdStr] = customId.split(":");
         const orderId = parseInt(orderIdStr, 10);
 
-        console.log("PAID BUTTON CLICKED", {
-          orderId,
-          userId: interaction.user.id,
-          username: interaction.user.tag,
-        });
-
         if (!isStaff(interaction.member)) {
-          console.log("PAID BLOCKED: not staff");
           return interaction.reply({ content: "Staff only.", ephemeral: true });
         }
 
         await pool.query(`UPDATE orders SET status='paid' WHERE order_id=$1`, [orderId]);
-        console.log("PAID DB UPDATED", { orderId });
 
         await interaction.update({
           content: `✅ Order #${orderId} marked as paid.`,
@@ -1841,8 +1833,6 @@ client.on("interactionCreate", async (interaction) => {
         });
 
         await interaction.channel.send(`✅ Order #${orderId} has been marked as paid.`);
-        console.log("PAID CHANNEL MESSAGE SENT", { orderId });
-
         return;
       }
 
@@ -1896,9 +1886,9 @@ client.on("interactionCreate", async (interaction) => {
           });
         }
 
-        if (currentStatus === "dispatched") {
+        if (currentStatus === "dispatched" || currentStatus === "completed") {
           return interaction.reply({
-            content: "Dispatched orders cannot be cancelled.",
+            content: "Dispatched or completed orders cannot be cancelled.",
             ephemeral: true,
           });
         }
@@ -1939,13 +1929,79 @@ client.on("interactionCreate", async (interaction) => {
           await interaction.channel.permissionOverwrites.edit(customerUserId, {
             SendMessages: false,
           });
-        } catch {
-          // ignore lock errors
-        }
+        } catch {}
 
         return;
       }
-    }
+
+      if (customId.startsWith("staff_complete_order:")) {
+        const [, orderIdStr] = customId.split(":");
+        const orderId = parseInt(orderIdStr, 10);
+
+        if (!isStaff(interaction.member)) {
+          return interaction.reply({ content: "Staff only.", ephemeral: true });
+        }
+
+        const orderRes = await pool.query(
+          `SELECT status FROM orders WHERE order_id=$1`,
+          [orderId]
+        );
+
+        if (!orderRes.rows.length) {
+          return interaction.reply({
+            content: "Order not found.",
+            ephemeral: true,
+          });
+        }
+
+        const currentStatus = orderRes.rows[0].status;
+
+        if (currentStatus === "cancelled") {
+          return interaction.reply({
+            content: "Cancelled orders cannot be completed.",
+            ephemeral: true,
+          });
+        }
+
+        if (currentStatus === "completed") {
+          return interaction.reply({
+            content: "This order is already completed.",
+            ephemeral: true,
+          });
+        }
+
+        if (currentStatus !== "dispatched") {
+          return interaction.reply({
+            content: "Order must be marked as dispatched before it can be completed.",
+            ephemeral: true,
+          });
+        }
+
+        await pool.query(
+          `UPDATE orders SET status='completed' WHERE order_id=$1`,
+          [orderId]
+        );
+
+        await interaction.update({
+          content: `✅ Order #${orderId} marked as completed. Closing this channel in 5 seconds...`,
+          embeds: interaction.message.embeds,
+          components: staffReceiptControls(orderId, "completed"),
+        });
+
+        await interaction.channel.send(
+          `✅ Order #${orderId} is complete. This channel will now close.`
+        );
+
+        setTimeout(async () => {
+          try {
+            await interaction.channel.delete("Order completed and closed by staff");
+          } catch (err) {
+            console.error("Failed to delete completed order channel:", err);
+          }
+        }, 5000);
+
+        return;
+      }
 
     if (interaction.isStringSelectMenu()) {
       const { customId } = interaction;
