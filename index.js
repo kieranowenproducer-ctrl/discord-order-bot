@@ -2707,8 +2707,7 @@ client.on("interactionCreate", async (interaction) => {
           }, 20000);
 
           return;
-        } finally {
-          clearSubmitLock(interaction.user.id);
+          releaseSubmitLock(interaction.user.id);
         }
       }
 
