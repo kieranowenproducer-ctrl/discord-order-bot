@@ -125,7 +125,7 @@ const CATALOG = {
     { sku: "E07", name: "5-Amino-1MQ (10mg)", price_pence: 3000, stock_qty: 10, sizes: ["Standard"], colors: ["Default"] },
     { sku: "E08", name: "SLU-PP-332 (5mg)", price_pence: 3500, stock_qty: 10, sizes: ["Standard"], colors: ["Default"] },
   ],
-  " PAIN &💤 SLEEP": [
+  "💤PAIN & SLEEP": [
     { sku: "F01", name: "Melatonin 5mg (100 tabs)", price_pence: 1500, stock_qty: 10, sizes: ["Standard"], colors: ["Default"] },
     { sku: "F02", name: "Zopiclone 10mg (140 tabs)", price_pence: 4000, stock_qty: 10, sizes: ["Standard"], colors: ["Default"] },
     { sku: "F03", name: "Diaz (10 tabs) (10mg)", price_pence: 1000, stock_qty: 10, sizes: ["Standard"], colors: ["Default"] },
