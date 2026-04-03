@@ -176,7 +176,36 @@ const CATALOG = {
   ],
 };
 
-const categoryOptions = Object.keys(CATALOG).map((cat) => ({ label: cat, value: cat }));
+/* ------------------------- CATEGORY ID / MENU DATA ------------------------ */
+
+function makeCategoryId(category) {
+  return String(category || "")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 50);
+}
+
+const CATEGORY_NAME_TO_ID = new Map(
+  Object.keys(CATALOG).map((category) => [category, makeCategoryId(category)])
+);
+
+const CATEGORY_ID_TO_NAME = new Map(
+  Object.keys(CATALOG).map((category) => [makeCategoryId(category), category])
+);
+
+function getCategoryNameFromId(categoryId) {
+  return CATEGORY_ID_TO_NAME.get(String(categoryId || "")) || null;
+}
+
+const categoryOptions = Object.keys(CATALOG)
+  .slice(0, 25)
+  .map((category) => ({
+    label: String(category).slice(0, 100),
+    value: CATEGORY_NAME_TO_ID.get(category),
+  }));
 
 /* ----------------------------- DATABASE SETUP ---------------------------- */
 
@@ -336,11 +365,14 @@ async function initDb() {
     );
   `);
 
-  await pool.query(`
+  await pool.query(
+    `
     INSERT INTO discount_codes (code, discount_percent, is_active, one_use_per_user, created_at, updated_at)
     VALUES ($1, $2, TRUE, TRUE, NOW(), NOW())
     ON CONFLICT (code) DO NOTHING
-  `, [String(WELCOME_CODE || "").toUpperCase(), Number(WELCOME_DISCOUNT_PERCENT || 0)]);
+    `,
+    [String(WELCOME_CODE || "").toUpperCase(), Number(WELCOME_DISCOUNT_PERCENT || 0)]
+  );
 
   for (const category of Object.keys(CATALOG)) {
     for (const item of CATALOG[category]) {
@@ -564,9 +596,11 @@ async function getOrCreateCart(userId) {
   if (existing.rows.length) return existing.rows[0].cart_id;
 
   const created = await pool.query(
-    `INSERT INTO carts (user_id, status, discount_code, discount_percent, updated_at)
-     VALUES ($1, 'open', NULL, 0, NOW())
-     RETURNING cart_id`,
+    `
+    INSERT INTO carts (user_id, status, discount_code, discount_percent, updated_at)
+    VALUES ($1, 'open', NULL, 0, NOW())
+    RETURNING cart_id
+    `,
     [userId]
   );
   return created.rows[0].cart_id;
@@ -739,7 +773,12 @@ function getShippingPenceForCountry(countryRaw) {
 
   if (isUK) return SHIPPING_UK_PENCE;
 
-  const isUSA = c.includes("usa") || c === "us" || c.includes("united states") || c.includes("america");
+  const isUSA =
+    c.includes("usa") ||
+    c === "us" ||
+    c.includes("united states") ||
+    c.includes("america");
+
   if (isUSA) return SHIPPING_USA_PENCE;
 
   return SHIPPING_EU_PENCE;
@@ -793,7 +832,6 @@ function categorySelectComponents() {
     .filter((opt) => opt && opt.label && opt.value)
     .slice(0, 25)
     .map((opt) => ({
-      ...opt,
       label: String(opt.label).slice(0, 100),
       value: String(opt.value).slice(0, 100),
       description: opt.description ? String(opt.description).slice(0, 100) : undefined,
@@ -830,21 +868,22 @@ function categorySelectComponents() {
   ];
 }
 
-async function itemSelectComponents(category) {
-  const items = (CATALOG[category] || []).slice(0, 25);
+async function itemSelectComponents(categoryId) {
+  const categoryName = getCategoryNameFromId(categoryId);
+  const items = categoryName ? (CATALOG[categoryName] || []).slice(0, 25) : [];
 
-  console.log("CATEGORY:", category, "ITEM COUNT:", items.length);
+  console.log("CATEGORY ID:", categoryId, "CATEGORY NAME:", categoryName, "ITEM COUNT:", items.length);
 
   const options = [];
 
-  for (const it of items) {
-    const stockQty = await getStockForSku(it.sku);
+  for (const item of items) {
+    if (!item?.sku || !item?.name) continue;
 
-    if (!it?.sku || !it?.name) continue;
+    const stockQty = await getStockForSku(item.sku);
 
     options.push({
-      label: `${it.name} — ${money(it.price_pence)} — Stock ${stockQty}`.slice(0, 100),
-      value: String(it.sku).slice(0, 100),
+      label: `${item.name} — ${money(item.price_pence)} — Stock ${stockQty}`.slice(0, 100),
+      value: String(item.sku).slice(0, 100),
       description: (stockQty > 0 ? `Available: ${stockQty}` : "Out of stock").slice(0, 100),
     });
   }
@@ -867,7 +906,7 @@ async function itemSelectComponents(category) {
   return [
     new ActionRowBuilder().addComponents(
       new StringSelectMenuBuilder()
-        .setCustomId(`select_item:${String(category).slice(0, 80)}`)
+        .setCustomId(`select_item:${String(categoryId).slice(0, 50)}`)
         .setPlaceholder("Choose an item…")
         .addOptions(options)
     ),
@@ -888,7 +927,7 @@ async function itemSelectComponents(category) {
   ];
 }
 
-async function qtyButtonsComponents(category, sku) {
+async function qtyButtonsComponents(categoryId, sku) {
   const stockQty = await getStockForSku(sku);
   const maxQuickQty = Math.min(stockQty, 5);
   const quickButtons = [];
@@ -896,7 +935,7 @@ async function qtyButtonsComponents(category, sku) {
   for (let n = 1; n <= maxQuickQty; n += 1) {
     quickButtons.push(
       new ButtonBuilder()
-        .setCustomId(`add_qty:${category}:${sku}:${n}`)
+        .setCustomId(`add_qty:${String(categoryId).slice(0, 50)}:${sku}:${n}`)
         .setLabel(String(n))
         .setStyle(ButtonStyle.Secondary)
     );
@@ -911,12 +950,12 @@ async function qtyButtonsComponents(category, sku) {
   rows.push(
     new ActionRowBuilder().addComponents(
       new ButtonBuilder()
-        .setCustomId(`add_qty_other:${category}:${sku}`)
+        .setCustomId(`add_qty_other:${String(categoryId).slice(0, 50)}:${sku}`)
         .setLabel("Other…")
         .setStyle(ButtonStyle.Primary)
         .setDisabled(stockQty <= 0),
       new ButtonBuilder()
-        .setCustomId(`back_to_items:${category}`)
+        .setCustomId(`back_to_items:${String(categoryId).slice(0, 50)}`)
         .setLabel("Back to Items")
         .setStyle(ButtonStyle.Secondary),
       new ButtonBuilder()
@@ -1055,7 +1094,7 @@ function staffStockCategoryComponents() {
     .slice(0, 25)
     .map((category) => ({
       label: String(category).slice(0, 100),
-      value: String(category).slice(0, 100),
+      value: CATEGORY_NAME_TO_ID.get(category),
     }));
 
   if (!options.length) {
@@ -1080,8 +1119,9 @@ function staffStockCategoryComponents() {
   ];
 }
 
-function staffStockItemComponents(category) {
-  const items = (CATALOG[category] || []).slice(0, 25);
+function staffStockItemComponents(categoryId) {
+  const categoryName = getCategoryNameFromId(categoryId);
+  const items = categoryName ? (CATALOG[categoryName] || []).slice(0, 25) : [];
 
   if (!items.length) {
     return [
@@ -1098,7 +1138,7 @@ function staffStockItemComponents(category) {
   return [
     new ActionRowBuilder().addComponents(
       new StringSelectMenuBuilder()
-        .setCustomId(`staff_stock_select_item:${String(category).slice(0, 80)}`)
+        .setCustomId(`staff_stock_select_item:${String(categoryId).slice(0, 50)}`)
         .setPlaceholder("Choose an item…")
         .addOptions(
           items
@@ -1113,11 +1153,12 @@ function staffStockItemComponents(category) {
   ];
 }
 
-function staffStockQtyModal(category, sku) {
-  const item = (CATALOG[category] || []).find((x) => x.sku === sku);
+function staffStockQtyModal(categoryId, sku) {
+  const categoryName = getCategoryNameFromId(categoryId);
+  const item = categoryName ? (CATALOG[categoryName] || []).find((x) => x.sku === sku) : null;
 
   const modal = new ModalBuilder()
-    .setCustomId(`staff_stock_qty_modal:${category}:${sku}`)
+    .setCustomId(`staff_stock_qty_modal:${String(categoryId).slice(0, 50)}:${sku}`)
     .setTitle("Update Stock");
 
   const qtyInput = new TextInputBuilder()
@@ -1180,8 +1221,10 @@ function shippingModal() {
   return modal;
 }
 
-function qtyOtherModal(category, sku) {
-  const modal = new ModalBuilder().setCustomId(`qty_other_modal:${category}:${sku}`).setTitle("Quantity");
+function qtyOtherModal(categoryId, sku) {
+  const modal = new ModalBuilder()
+    .setCustomId(`qty_other_modal:${String(categoryId).slice(0, 50)}:${sku}`)
+    .setTitle("Quantity");
 
   const qty = new TextInputBuilder()
     .setCustomId("qty")
@@ -1330,7 +1373,7 @@ function staffToggleDiscountModal() {
 /* ---------------------------- RECEIPT CHANNEL ---------------------------- */
 
 async function createReceiptChannel(guild, user, orderId) {
-  const category = await guild.channels.fetch(ORDERS_CATEGORY_ID);
+  const category = await guild.channels.fetch(ORDERS_CATEGORY_ID).catch(() => null);
 
   const name = safeChannelName(`order-${user.username}-${orderId}`);
   const channel = await guild.channels.create({
@@ -1350,7 +1393,10 @@ async function createReceiptChannel(guild, user, orderId) {
 
 function bankDetailsText(orderId) {
   const ref = `ORDER-${orderId}`;
-  const extras = [BANK_IBAN ? `IBAN: ${BANK_IBAN}` : null, BANK_SWIFT ? `SWIFT/BIC: ${BANK_SWIFT}` : null].filter(Boolean);
+  const extras = [
+    BANK_IBAN ? `IBAN: ${BANK_IBAN}` : null,
+    BANK_SWIFT ? `SWIFT/BIC: ${BANK_SWIFT}` : null,
+  ].filter(Boolean);
 
   return (
     `**Bank:** ${BANK_BANK_NAME}\n` +
@@ -1422,7 +1468,6 @@ function staffReceiptControls(orderId, status = "pending") {
           status === "cancelled" ||
           status === "completed"
         ),
-
       new ButtonBuilder()
         .setCustomId(`staff_mark_dispatched:${orderId}`)
         .setLabel("Mark as dispatched 📦")
@@ -1432,7 +1477,6 @@ function staffReceiptControls(orderId, status = "pending") {
           status === "cancelled" ||
           status === "completed"
         ),
-
       new ButtonBuilder()
         .setCustomId(`staff_cancel_order:${orderId}`)
         .setLabel("Cancel Order ❌")
@@ -1442,7 +1486,6 @@ function staffReceiptControls(orderId, status = "pending") {
           status === "cancelled" ||
           status === "completed"
         ),
-
       new ButtonBuilder()
         .setCustomId(`staff_complete_order:${orderId}`)
         .setLabel("Complete & Close ✅")
@@ -1927,11 +1970,12 @@ client.on("interactionCreate", async (interaction) => {
       if (customId.startsWith("back_to_items:")) {
         trackCartUiMessage(interaction.user.id, interaction.channel.id, interaction.message.id);
 
-        const [, category] = customId.split(":");
-        const itemComponents = await itemSelectComponents(category);
+        const [, categoryId] = customId.split(":");
+        const categoryName = getCategoryNameFromId(categoryId);
+        const itemComponents = await itemSelectComponents(categoryId);
 
         return interaction.update({
-          content: `Category selected: **${category}**\nNow choose an item:`,
+          content: `Category selected: **${categoryName || "Unknown category"}**\nNow choose an item:`,
           components: itemComponents,
         });
       }
@@ -1939,10 +1983,11 @@ client.on("interactionCreate", async (interaction) => {
       if (customId.startsWith("add_qty:")) {
         trackCartUiMessage(interaction.user.id, interaction.channel.id, interaction.message.id);
 
-        const [, category, sku, qtyStr] = customId.split(":");
+        const [, categoryId, sku, qtyStr] = customId.split(":");
         const qty = parseInt(qtyStr, 10);
+        const categoryName = getCategoryNameFromId(categoryId);
 
-        const item = (CATALOG[category] || []).find((x) => x.sku === sku);
+        const item = categoryName ? (CATALOG[categoryName] || []).find((x) => x.sku === sku) : null;
         if (!item) {
           return interaction.update({
             content: "❌ Item not found.",
@@ -1977,8 +2022,8 @@ client.on("interactionCreate", async (interaction) => {
 
       if (customId.startsWith("add_qty_other:")) {
         trackCartUiMessage(interaction.user.id, interaction.channel.id, interaction.message.id);
-        const [, category, sku] = customId.split(":");
-        return interaction.showModal(qtyOtherModal(category, sku));
+        const [, categoryId, sku] = customId.split(":");
+        return interaction.showModal(qtyOtherModal(categoryId, sku));
       }
 
       if (customId === "cart_discount") {
@@ -2286,10 +2331,7 @@ client.on("interactionCreate", async (interaction) => {
           );
         }
 
-        await pool.query(
-          `UPDATE orders SET status='cancelled' WHERE order_id=$1`,
-          [orderId]
-        );
+        await pool.query(`UPDATE orders SET status='cancelled' WHERE order_id=$1`, [orderId]);
 
         await interaction.update({
           content: `❌ Order #${orderId} has been cancelled.`,
@@ -2297,9 +2339,7 @@ client.on("interactionCreate", async (interaction) => {
           components: staffReceiptControls(orderId, "cancelled"),
         });
 
-        await interaction.channel.send(
-          `❌ Order #${orderId} has been cancelled. Stock has been restored.`
-        );
+        await interaction.channel.send(`❌ Order #${orderId} has been cancelled. Stock has been restored.`);
 
         try {
           await interaction.channel.permissionOverwrites.edit(customerUserId, {
@@ -2318,10 +2358,7 @@ client.on("interactionCreate", async (interaction) => {
           return interaction.reply({ content: "Staff only.", flags: 64 });
         }
 
-        const orderRes = await pool.query(
-          `SELECT status FROM orders WHERE order_id=$1`,
-          [orderId]
-        );
+        const orderRes = await pool.query(`SELECT status FROM orders WHERE order_id=$1`, [orderId]);
 
         if (!orderRes.rows.length) {
           return interaction.reply({
@@ -2353,10 +2390,7 @@ client.on("interactionCreate", async (interaction) => {
           });
         }
 
-        await pool.query(
-          `UPDATE orders SET status='completed' WHERE order_id=$1`,
-          [orderId]
-        );
+        await pool.query(`UPDATE orders SET status='completed' WHERE order_id=$1`, [orderId]);
 
         await interaction.update({
           content: `✅ Order #${orderId} marked as completed. Closing this channel in 5 seconds...`,
@@ -2364,9 +2398,7 @@ client.on("interactionCreate", async (interaction) => {
           components: staffReceiptControls(orderId, "completed"),
         });
 
-        await interaction.channel.send(
-          `✅ Order #${orderId} is complete. This channel will now close.`
-        );
+        await interaction.channel.send(`✅ Order #${orderId} is complete. This channel will now close.`);
 
         setTimeout(async () => {
           try {
@@ -2383,10 +2415,7 @@ client.on("interactionCreate", async (interaction) => {
     if (interaction.isStringSelectMenu()) {
       const { customId } = interaction;
 
-      if (
-        customId === "select_category" ||
-        customId.startsWith("select_item:")
-      ) {
+      if (customId === "select_category" || customId.startsWith("select_item:")) {
         resetShopSessionTimeout(interaction.guild, interaction.user.id);
       }
 
@@ -2398,11 +2427,12 @@ client.on("interactionCreate", async (interaction) => {
           return interaction.reply({ content: "Use this in the staff-only channel.", flags: 64 });
         }
 
-        const category = interaction.values[0];
+        const categoryId = interaction.values[0];
+        const categoryName = getCategoryNameFromId(categoryId);
 
         return interaction.update({
-          content: `Category selected: **${category}**\nNow choose an item:`,
-          components: staffStockItemComponents(category),
+          content: `Category selected: **${categoryName || "Unknown category"}**\nNow choose an item:`,
+          components: staffStockItemComponents(categoryId),
         });
       }
 
@@ -2414,20 +2444,21 @@ client.on("interactionCreate", async (interaction) => {
           return interaction.reply({ content: "Use this in the staff-only channel.", flags: 64 });
         }
 
-        const [, category] = customId.split(":");
+        const [, categoryId] = customId.split(":");
         const sku = interaction.values[0];
 
-        return interaction.showModal(staffStockQtyModal(category, sku));
+        return interaction.showModal(staffStockQtyModal(categoryId, sku));
       }
 
       if (customId === "select_category") {
         trackCartUiMessage(interaction.user.id, interaction.channel.id, interaction.message.id);
 
-        const category = interaction.values[0];
-        const itemComponents = await itemSelectComponents(category);
+        const categoryId = interaction.values[0];
+        const categoryName = getCategoryNameFromId(categoryId);
+        const itemComponents = await itemSelectComponents(categoryId);
 
         return interaction.update({
-          content: `Category selected: **${category}**\nNow choose an item:`,
+          content: `Category selected: **${categoryName || "Unknown category"}**\nNow choose an item:`,
           components: itemComponents,
         });
       }
@@ -2435,18 +2466,18 @@ client.on("interactionCreate", async (interaction) => {
       if (customId.startsWith("select_item:")) {
         trackCartUiMessage(interaction.user.id, interaction.channel.id, interaction.message.id);
 
-        const [, category] = customId.split(":");
+        const [, categoryId] = customId.split(":");
         const sku = interaction.values[0];
 
         const stockQty = await getStockForSku(sku);
         if (stockQty <= 0) {
           return interaction.update({
             content: "That item is out of stock.",
-            components: await itemSelectComponents(category),
+            components: await itemSelectComponents(categoryId),
           });
         }
 
-        const qtyComponents = await qtyButtonsComponents(category, sku);
+        const qtyComponents = await qtyButtonsComponents(categoryId, sku);
 
         return interaction.update({
           content: `Selected item — how many? (In stock: ${stockQty})`,
@@ -2590,9 +2621,10 @@ client.on("interactionCreate", async (interaction) => {
           return interaction.reply({ content: "Use this in the staff-only channel.", flags: 64 });
         }
 
-        const [, category, sku] = customId.split(":");
+        const [, categoryId, sku] = customId.split(":");
         const qtyRaw = interaction.fields.getTextInputValue("stock_qty")?.trim();
         const qty = parseInt(qtyRaw, 10);
+        const categoryName = getCategoryNameFromId(categoryId);
 
         if (!Number.isFinite(qty) || qty < 0) {
           return interaction.reply({
@@ -2601,7 +2633,7 @@ client.on("interactionCreate", async (interaction) => {
           });
         }
 
-        const item = (CATALOG[category] || []).find((x) => x.sku === sku);
+        const item = categoryName ? (CATALOG[categoryName] || []).find((x) => x.sku === sku) : null;
         if (!item) {
           return interaction.reply({
             content: "Item not found.",
@@ -2746,16 +2778,19 @@ client.on("interactionCreate", async (interaction) => {
       }
 
       if (customId.startsWith("qty_other_modal:")) {
-        const [, category, sku] = customId.split(":");
+        const [, categoryId, sku] = customId.split(":");
         const qtyRaw = interaction.fields.getTextInputValue("qty");
         const qty = parseInt(qtyRaw, 10);
+        const categoryName = getCategoryNameFromId(categoryId);
 
         if (!Number.isFinite(qty) || qty <= 0) {
           return interaction.reply({ content: "Please enter a valid quantity (number > 0).", flags: 64 });
         }
 
-        const item = (CATALOG[category] || []).find((x) => x.sku === sku);
-        if (!item) return interaction.reply({ content: "Item not found.", flags: 64 });
+        const item = categoryName ? (CATALOG[categoryName] || []).find((x) => x.sku === sku) : null;
+        if (!item) {
+          return interaction.reply({ content: "Item not found.", flags: 64 });
+        }
 
         const stockQty = await getStockForSku(item.sku);
         if (qty > stockQty) {
