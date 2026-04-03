@@ -787,12 +787,35 @@ function menuMessageComponents() {
 }
 
 function categorySelectComponents() {
+  console.log("CATEGORY OPTIONS COUNT:", Array.isArray(categoryOptions) ? categoryOptions.length : 0);
+
+  const safeOptions = (categoryOptions || [])
+    .filter((opt) => opt && opt.label && opt.value)
+    .slice(0, 25)
+    .map((opt) => ({
+      ...opt,
+      label: String(opt.label).slice(0, 100),
+      value: String(opt.value).slice(0, 100),
+      description: opt.description ? String(opt.description).slice(0, 100) : undefined,
+    }));
+
+  if (!safeOptions.length) {
+    return [
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId("shop_close_session")
+          .setLabel("Close Shop")
+          .setStyle(ButtonStyle.Danger)
+      ),
+    ];
+  }
+
   return [
     new ActionRowBuilder().addComponents(
       new StringSelectMenuBuilder()
         .setCustomId("select_category")
         .setPlaceholder("Choose a category…")
-        .addOptions(categoryOptions)
+        .addOptions(safeOptions)
     ),
     new ActionRowBuilder().addComponents(
       new ButtonBuilder()
@@ -808,22 +831,43 @@ function categorySelectComponents() {
 }
 
 async function itemSelectComponents(category) {
-  const items = CATALOG[category] || [];
+  const items = (CATALOG[category] || []).slice(0, 25);
+
+  console.log("CATEGORY:", category, "ITEM COUNT:", items.length);
+
   const options = [];
 
   for (const it of items) {
     const stockQty = await getStockForSku(it.sku);
+
+    if (!it?.sku || !it?.name) continue;
+
     options.push({
       label: `${it.name} — ${money(it.price_pence)} — Stock ${stockQty}`.slice(0, 100),
-      value: it.sku,
-      description: stockQty > 0 ? `Available: ${stockQty}` : "Out of stock",
+      value: String(it.sku).slice(0, 100),
+      description: (stockQty > 0 ? `Available: ${stockQty}` : "Out of stock").slice(0, 100),
     });
+  }
+
+  if (!options.length) {
+    return [
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId("browse_categories")
+          .setLabel("Back to Categories")
+          .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId("shop_close_session")
+          .setLabel("Close Shop")
+          .setStyle(ButtonStyle.Danger)
+      ),
+    ];
   }
 
   return [
     new ActionRowBuilder().addComponents(
       new StringSelectMenuBuilder()
-        .setCustomId(`select_item:${category}`)
+        .setCustomId(`select_item:${String(category).slice(0, 80)}`)
         .setPlaceholder("Choose an item…")
         .addOptions(options)
     ),
@@ -1007,35 +1051,63 @@ function staffPanelComponents() {
 }
 
 function staffStockCategoryComponents() {
+  const options = Object.keys(CATALOG)
+    .slice(0, 25)
+    .map((category) => ({
+      label: String(category).slice(0, 100),
+      value: String(category).slice(0, 100),
+    }));
+
+  if (!options.length) {
+    return [
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId("staff_panel_back_noop")
+          .setLabel("No categories available")
+          .setStyle(ButtonStyle.Secondary)
+          .setDisabled(true)
+      ),
+    ];
+  }
+
   return [
     new ActionRowBuilder().addComponents(
       new StringSelectMenuBuilder()
         .setCustomId("staff_stock_select_category")
         .setPlaceholder("Choose a category…")
-        .addOptions(
-          Object.keys(CATALOG).map((category) => ({
-            label: category.slice(0, 100),
-            value: category,
-          }))
-        )
+        .addOptions(options)
     ),
   ];
 }
 
 function staffStockItemComponents(category) {
-  const items = CATALOG[category] || [];
+  const items = (CATALOG[category] || []).slice(0, 25);
+
+  if (!items.length) {
+    return [
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId("staff_panel_back_noop")
+          .setLabel("No items in this category")
+          .setStyle(ButtonStyle.Secondary)
+          .setDisabled(true)
+      ),
+    ];
+  }
 
   return [
     new ActionRowBuilder().addComponents(
       new StringSelectMenuBuilder()
-        .setCustomId(`staff_stock_select_item:${category}`)
+        .setCustomId(`staff_stock_select_item:${String(category).slice(0, 80)}`)
         .setPlaceholder("Choose an item…")
         .addOptions(
-          items.map((item) => ({
-            label: `${item.name}`.slice(0, 100),
-            description: `SKU: ${item.sku}`.slice(0, 100),
-            value: item.sku,
-          }))
+          items
+            .filter((item) => item && item.name && item.sku)
+            .map((item) => ({
+              label: String(item.name).slice(0, 100),
+              description: `SKU: ${String(item.sku)}`.slice(0, 100),
+              value: String(item.sku).slice(0, 100),
+            }))
         )
     ),
   ];
@@ -1535,7 +1607,7 @@ async function createOrGetShopSessionChannel(guild, user) {
 async function sendOrEditCartUiMessage(interaction, payload, options = {}) {
   const { keepReply = false } = options;
 
-  await interaction.deferReply({ ephemeral: true });
+  await interaction.deferReply({ flags: 64 });
 
   const targetChannel = await createOrGetShopSessionChannel(interaction.guild, interaction.user);
   const existing = await getTrackedCartUiMessage(interaction.user.id, targetChannel);
@@ -1599,11 +1671,11 @@ client.on("interactionCreate", async (interaction) => {
   try {
     if (interaction.isChatInputCommand()) {
       if (interaction.commandName === "ping") {
-        return interaction.reply({ content: "pong ✅", ephemeral: true });
+        return interaction.reply({ content: "pong ✅", flags: 64 });
       }
 
       if (interaction.commandName === "setupshop") {
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferReply({ flags: 64 });
         deferred = true;
 
         const menuChannel = await client.channels.fetch(MENU_CHANNEL_ID);
@@ -1627,7 +1699,7 @@ client.on("interactionCreate", async (interaction) => {
       }
 
       if (interaction.commandName === "setupverify") {
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferReply({ flags: 64 });
         deferred = true;
 
         const verifyChannel = await client.channels.fetch(VERIFY_CHANNEL_ID).catch(() => null);
@@ -1646,7 +1718,7 @@ client.on("interactionCreate", async (interaction) => {
       }
 
       if (interaction.commandName === "setupstaffpanel") {
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferReply({ flags: 64 });
         deferred = true;
 
         const staffChannel = await client.channels.fetch(STAFF_ONLY_CHANNEL_ID).catch(() => null);
@@ -1696,7 +1768,7 @@ client.on("interactionCreate", async (interaction) => {
         const [, targetUserId] = customId.split(":");
 
         if (!isStaff(interaction.member)) {
-          return interaction.reply({ content: "Staff only.", ephemeral: true });
+          return interaction.reply({ content: "Staff only.", flags: 64 });
         }
 
         const guild = interaction.guild;
@@ -1705,7 +1777,7 @@ client.on("interactionCreate", async (interaction) => {
         if (!member) {
           return interaction.reply({
             content: "Could not find that user in the server.",
-            ephemeral: true,
+            flags: 64,
           });
         }
 
@@ -1716,14 +1788,14 @@ client.on("interactionCreate", async (interaction) => {
         if (!verifiedRole) {
           return interaction.reply({
             content: "Could not find the Verified role. Check VERIFIED_ROLE_ID.",
-            ephemeral: true,
+            flags: 64,
           });
         }
 
         if (member.roles.cache.has(VERIFIED_ROLE_ID)) {
           return interaction.reply({
             content: "That user is already verified.",
-            ephemeral: true,
+            flags: 64,
           });
         }
 
@@ -1744,35 +1816,35 @@ client.on("interactionCreate", async (interaction) => {
 
       if (customId === "staff_open_stock_modal") {
         if (!isStaff(interaction.member)) {
-          return interaction.reply({ content: "Staff only.", ephemeral: true });
+          return interaction.reply({ content: "Staff only.", flags: 64 });
         }
         if (!isStaffChannel(interaction)) {
-          return interaction.reply({ content: "Use this in the staff-only channel.", ephemeral: true });
+          return interaction.reply({ content: "Use this in the staff-only channel.", flags: 64 });
         }
 
         return interaction.reply({
           content: "Choose a category to update stock:",
           components: staffStockCategoryComponents(),
-          ephemeral: true,
+          flags: 64,
         });
       }
 
       if (customId === "staff_open_orderlookup_modal") {
         if (!isStaff(interaction.member)) {
-          return interaction.reply({ content: "Staff only.", ephemeral: true });
+          return interaction.reply({ content: "Staff only.", flags: 64 });
         }
         if (!isStaffChannel(interaction)) {
-          return interaction.reply({ content: "Use this in the staff-only channel.", ephemeral: true });
+          return interaction.reply({ content: "Use this in the staff-only channel.", flags: 64 });
         }
         return interaction.showModal(staffOrderLookupModal());
       }
 
       if (customId === "staff_open_create_discount_modal") {
         if (!isStaff(interaction.member)) {
-          return interaction.reply({ content: "Staff only.", ephemeral: true });
+          return interaction.reply({ content: "Staff only.", flags: 64 });
         }
         if (!isStaffChannel(interaction)) {
-          return interaction.reply({ content: "Use this in the staff-only channel.", ephemeral: true });
+          return interaction.reply({ content: "Use this in the staff-only channel.", flags: 64 });
         }
 
         return interaction.showModal(staffCreateDiscountModal());
@@ -1780,10 +1852,10 @@ client.on("interactionCreate", async (interaction) => {
 
       if (customId === "staff_open_toggle_discount_modal") {
         if (!isStaff(interaction.member)) {
-          return interaction.reply({ content: "Staff only.", ephemeral: true });
+          return interaction.reply({ content: "Staff only.", flags: 64 });
         }
         if (!isStaffChannel(interaction)) {
-          return interaction.reply({ content: "Use this in the staff-only channel.", ephemeral: true });
+          return interaction.reply({ content: "Use this in the staff-only channel.", flags: 64 });
         }
 
         return interaction.showModal(staffToggleDiscountModal());
@@ -1791,10 +1863,10 @@ client.on("interactionCreate", async (interaction) => {
 
       if (customId === "staff_restock_all_confirm") {
         if (!isStaff(interaction.member)) {
-          return interaction.reply({ content: "Staff only.", ephemeral: true });
+          return interaction.reply({ content: "Staff only.", flags: 64 });
         }
         if (!isStaffChannel(interaction)) {
-          return interaction.reply({ content: "Use this in the staff-only channel.", ephemeral: true });
+          return interaction.reply({ content: "Use this in the staff-only channel.", flags: 64 });
         }
 
         return interaction.reply({
@@ -1807,13 +1879,13 @@ client.on("interactionCreate", async (interaction) => {
                 .setStyle(ButtonStyle.Danger)
             ),
           ],
-          ephemeral: true,
+          flags: 64,
         });
       }
 
       if (customId === "staff_restock_all_execute") {
         if (!isStaff(interaction.member)) {
-          return interaction.reply({ content: "Staff only.", ephemeral: true });
+          return interaction.reply({ content: "Staff only.", flags: 64 });
         }
 
         for (const category of Object.keys(CATALOG)) {
@@ -2125,7 +2197,7 @@ client.on("interactionCreate", async (interaction) => {
         const orderId = parseInt(orderIdStr, 10);
 
         if (!isStaff(interaction.member)) {
-          return interaction.reply({ content: "Staff only.", ephemeral: true });
+          return interaction.reply({ content: "Staff only.", flags: 64 });
         }
 
         await pool.query(`UPDATE orders SET status='paid' WHERE order_id=$1`, [orderId]);
@@ -2145,7 +2217,7 @@ client.on("interactionCreate", async (interaction) => {
         const orderId = parseInt(orderIdStr, 10);
 
         if (!isStaff(interaction.member)) {
-          return interaction.reply({ content: "Staff only.", ephemeral: true });
+          return interaction.reply({ content: "Staff only.", flags: 64 });
         }
 
         await pool.query(`UPDATE orders SET status='dispatched' WHERE order_id=$1`, [orderId]);
@@ -2165,7 +2237,7 @@ client.on("interactionCreate", async (interaction) => {
         const orderId = parseInt(orderIdStr, 10);
 
         if (!isStaff(interaction.member)) {
-          return interaction.reply({ content: "Staff only.", ephemeral: true });
+          return interaction.reply({ content: "Staff only.", flags: 64 });
         }
 
         const orderRes = await pool.query(
@@ -2176,7 +2248,7 @@ client.on("interactionCreate", async (interaction) => {
         if (!orderRes.rows.length) {
           return interaction.reply({
             content: "Order not found.",
-            ephemeral: true,
+            flags: 64,
           });
         }
 
@@ -2186,14 +2258,14 @@ client.on("interactionCreate", async (interaction) => {
         if (currentStatus === "cancelled") {
           return interaction.reply({
             content: "This order is already cancelled.",
-            ephemeral: true,
+            flags: 64,
           });
         }
 
         if (currentStatus === "dispatched" || currentStatus === "completed") {
           return interaction.reply({
             content: "Dispatched or completed orders cannot be cancelled.",
-            ephemeral: true,
+            flags: 64,
           });
         }
 
@@ -2243,7 +2315,7 @@ client.on("interactionCreate", async (interaction) => {
         const orderId = parseInt(orderIdStr, 10);
 
         if (!isStaff(interaction.member)) {
-          return interaction.reply({ content: "Staff only.", ephemeral: true });
+          return interaction.reply({ content: "Staff only.", flags: 64 });
         }
 
         const orderRes = await pool.query(
@@ -2254,7 +2326,7 @@ client.on("interactionCreate", async (interaction) => {
         if (!orderRes.rows.length) {
           return interaction.reply({
             content: "Order not found.",
-            ephemeral: true,
+            flags: 64,
           });
         }
 
@@ -2263,21 +2335,21 @@ client.on("interactionCreate", async (interaction) => {
         if (currentStatus === "cancelled") {
           return interaction.reply({
             content: "Cancelled orders cannot be completed.",
-            ephemeral: true,
+            flags: 64,
           });
         }
 
         if (currentStatus === "completed") {
           return interaction.reply({
             content: "This order is already completed.",
-            ephemeral: true,
+            flags: 64,
           });
         }
 
         if (currentStatus !== "dispatched") {
           return interaction.reply({
             content: "Order must be marked as dispatched before it can be completed.",
-            ephemeral: true,
+            flags: 64,
           });
         }
 
@@ -2320,10 +2392,10 @@ client.on("interactionCreate", async (interaction) => {
 
       if (customId === "staff_stock_select_category") {
         if (!isStaff(interaction.member)) {
-          return interaction.reply({ content: "Staff only.", ephemeral: true });
+          return interaction.reply({ content: "Staff only.", flags: 64 });
         }
         if (!isStaffChannel(interaction)) {
-          return interaction.reply({ content: "Use this in the staff-only channel.", ephemeral: true });
+          return interaction.reply({ content: "Use this in the staff-only channel.", flags: 64 });
         }
 
         const category = interaction.values[0];
@@ -2336,10 +2408,10 @@ client.on("interactionCreate", async (interaction) => {
 
       if (customId.startsWith("staff_stock_select_item:")) {
         if (!isStaff(interaction.member)) {
-          return interaction.reply({ content: "Staff only.", ephemeral: true });
+          return interaction.reply({ content: "Staff only.", flags: 64 });
         }
         if (!isStaffChannel(interaction)) {
-          return interaction.reply({ content: "Use this in the staff-only channel.", ephemeral: true });
+          return interaction.reply({ content: "Use this in the staff-only channel.", flags: 64 });
         }
 
         const [, category] = customId.split(":");
@@ -2402,7 +2474,7 @@ client.on("interactionCreate", async (interaction) => {
         const country = interaction.fields.getTextInputValue("country")?.trim();
 
         if (!full_name || !email || !phone || !full_address || !country) {
-          return interaction.reply({ content: "All fields are required.", ephemeral: true });
+          return interaction.reply({ content: "All fields are required.", flags: 64 });
         }
 
         await upsertProfile(interaction.user.id, full_name, email, phone, { full_address, country });
@@ -2447,7 +2519,7 @@ client.on("interactionCreate", async (interaction) => {
         if (!submittedName || !foundUs || !referral || !email || !phone) {
           return interaction.reply({
             content: "All verification fields are required.",
-            ephemeral: true,
+            flags: 64,
           });
         }
 
@@ -2455,7 +2527,7 @@ client.on("interactionCreate", async (interaction) => {
         if (!emailLooksValid) {
           return interaction.reply({
             content: "Please enter a valid email address.",
-            ephemeral: true,
+            flags: 64,
           });
         }
 
@@ -2463,7 +2535,7 @@ client.on("interactionCreate", async (interaction) => {
         if (phoneClean.length < 7) {
           return interaction.reply({
             content: "Please enter a valid phone number.",
-            ephemeral: true,
+            flags: 64,
           });
         }
 
@@ -2471,7 +2543,7 @@ client.on("interactionCreate", async (interaction) => {
         if (!logChannel) {
           return interaction.reply({
             content: "Could not find the verification log channel. Check VERIFICATION_LOG_CHANNEL_ID.",
-            ephemeral: true,
+            flags: 64,
           });
         }
 
@@ -2479,7 +2551,7 @@ client.on("interactionCreate", async (interaction) => {
         if (member?.roles?.cache?.has(VERIFIED_ROLE_ID)) {
           return interaction.reply({
             content: "You are already verified.",
-            ephemeral: true,
+            flags: 64,
           });
         }
 
@@ -2506,16 +2578,16 @@ client.on("interactionCreate", async (interaction) => {
 
         return interaction.reply({
           content: "✅ Thanks. Your verification has been submitted and will be reviewed shortly.",
-          ephemeral: true,
+          flags: 64,
         });
       }
 
       if (customId.startsWith("staff_stock_qty_modal:")) {
         if (!isStaff(interaction.member)) {
-          return interaction.reply({ content: "Staff only.", ephemeral: true });
+          return interaction.reply({ content: "Staff only.", flags: 64 });
         }
         if (!isStaffChannel(interaction)) {
-          return interaction.reply({ content: "Use this in the staff-only channel.", ephemeral: true });
+          return interaction.reply({ content: "Use this in the staff-only channel.", flags: 64 });
         }
 
         const [, category, sku] = customId.split(":");
@@ -2525,7 +2597,7 @@ client.on("interactionCreate", async (interaction) => {
         if (!Number.isFinite(qty) || qty < 0) {
           return interaction.reply({
             content: "Enter a valid stock quantity of 0 or more.",
-            ephemeral: true,
+            flags: 64,
           });
         }
 
@@ -2533,7 +2605,7 @@ client.on("interactionCreate", async (interaction) => {
         if (!item) {
           return interaction.reply({
             content: "Item not found.",
-            ephemeral: true,
+            flags: 64,
           });
         }
 
@@ -2544,16 +2616,16 @@ client.on("interactionCreate", async (interaction) => {
 
         return interaction.reply({
           content: `✅ Stock updated for **${item.name}** (${sku}) → ${qty}`,
-          ephemeral: true,
+          flags: 64,
         });
       }
 
       if (customId === "staff_orderlookup_modal") {
         if (!isStaff(interaction.member)) {
-          return interaction.reply({ content: "Staff only.", ephemeral: true });
+          return interaction.reply({ content: "Staff only.", flags: 64 });
         }
         if (!isStaffChannel(interaction)) {
-          return interaction.reply({ content: "Use this in the staff-only channel.", ephemeral: true });
+          return interaction.reply({ content: "Use this in the staff-only channel.", flags: 64 });
         }
 
         const orderIdRaw = interaction.fields.getTextInputValue("lookup_order_id")?.trim();
@@ -2562,7 +2634,7 @@ client.on("interactionCreate", async (interaction) => {
         if (!Number.isFinite(orderId) || orderId <= 0) {
           return interaction.reply({
             content: "Enter a valid order ID.",
-            ephemeral: true,
+            flags: 64,
           });
         }
 
@@ -2570,7 +2642,7 @@ client.on("interactionCreate", async (interaction) => {
         if (!orderRes.rows.length) {
           return interaction.reply({
             content: "Order not found.",
-            ephemeral: true,
+            flags: 64,
           });
         }
 
@@ -2598,16 +2670,16 @@ client.on("interactionCreate", async (interaction) => {
 
         return interaction.reply({
           embeds: [embed],
-          ephemeral: true,
+          flags: 64,
         });
       }
 
       if (customId === "staff_create_discount_modal") {
         if (!isStaff(interaction.member)) {
-          return interaction.reply({ content: "Staff only.", ephemeral: true });
+          return interaction.reply({ content: "Staff only.", flags: 64 });
         }
         if (!isStaffChannel(interaction)) {
-          return interaction.reply({ content: "Use this in the staff-only channel.", ephemeral: true });
+          return interaction.reply({ content: "Use this in the staff-only channel.", flags: 64 });
         }
 
         const codeRaw = interaction.fields.getTextInputValue("discount_code")?.trim();
@@ -2617,27 +2689,27 @@ client.on("interactionCreate", async (interaction) => {
         const percent = parseInt(percentRaw, 10);
 
         if (!code) {
-          return interaction.reply({ content: "Enter a valid code.", ephemeral: true });
+          return interaction.reply({ content: "Enter a valid code.", flags: 64 });
         }
 
         if (!Number.isFinite(percent) || percent < 0 || percent > 100) {
-          return interaction.reply({ content: "Enter a valid percent from 0 to 100.", ephemeral: true });
+          return interaction.reply({ content: "Enter a valid percent from 0 to 100.", flags: 64 });
         }
 
         await createDiscountCodeRecord(code, percent);
 
         return interaction.reply({
           content: `✅ Discount code **${code}** created/updated at ${percent}% and set active.`,
-          ephemeral: true,
+          flags: 64,
         });
       }
 
       if (customId === "staff_toggle_discount_modal") {
         if (!isStaff(interaction.member)) {
-          return interaction.reply({ content: "Staff only.", ephemeral: true });
+          return interaction.reply({ content: "Staff only.", flags: 64 });
         }
         if (!isStaffChannel(interaction)) {
-          return interaction.reply({ content: "Use this in the staff-only channel.", ephemeral: true });
+          return interaction.reply({ content: "Use this in the staff-only channel.", flags: 64 });
         }
 
         const codeRaw = interaction.fields.getTextInputValue("discount_code")?.trim();
@@ -2646,7 +2718,7 @@ client.on("interactionCreate", async (interaction) => {
         const code = normalizeDiscountCode(codeRaw);
 
         if (!code) {
-          return interaction.reply({ content: "Enter a valid code.", ephemeral: true });
+          return interaction.reply({ content: "Enter a valid code.", flags: 64 });
         }
 
         let active;
@@ -2655,7 +2727,7 @@ client.on("interactionCreate", async (interaction) => {
         else {
           return interaction.reply({
             content: "Type either active or inactive.",
-            ephemeral: true,
+            flags: 64,
           });
         }
 
@@ -2663,13 +2735,13 @@ client.on("interactionCreate", async (interaction) => {
         if (!updated) {
           return interaction.reply({
             content: "That discount code was not found.",
-            ephemeral: true,
+            flags: 64,
           });
         }
 
         return interaction.reply({
           content: `✅ Discount code **${updated.code}** is now **${updated.is_active ? "active" : "inactive"}**.`,
-          ephemeral: true,
+          flags: 64,
         });
       }
 
@@ -2679,17 +2751,17 @@ client.on("interactionCreate", async (interaction) => {
         const qty = parseInt(qtyRaw, 10);
 
         if (!Number.isFinite(qty) || qty <= 0) {
-          return interaction.reply({ content: "Please enter a valid quantity (number > 0).", ephemeral: true });
+          return interaction.reply({ content: "Please enter a valid quantity (number > 0).", flags: 64 });
         }
 
         const item = (CATALOG[category] || []).find((x) => x.sku === sku);
-        if (!item) return interaction.reply({ content: "Item not found.", ephemeral: true });
+        if (!item) return interaction.reply({ content: "Item not found.", flags: 64 });
 
         const stockQty = await getStockForSku(item.sku);
         if (qty > stockQty) {
           return interaction.reply({
             content: `Only ${stockQty} in stock for ${item.name}.`,
-            ephemeral: true,
+            flags: 64,
           });
         }
 
@@ -2715,19 +2787,19 @@ client.on("interactionCreate", async (interaction) => {
         const enteredCode = normalizeDiscountCode(enteredRaw);
 
         if (!enteredCode) {
-          return interaction.reply({ content: "Please enter a code.", ephemeral: true });
+          return interaction.reply({ content: "Please enter a code.", flags: 64 });
         }
 
         const cart = await getCartSummary(interaction.user.id);
         if (!cart.items.length) {
-          return interaction.reply({ content: "Your cart is empty.", ephemeral: true });
+          return interaction.reply({ content: "Your cart is empty.", flags: 64 });
         }
 
         const existingDiscount = await getCartDiscount(interaction.user.id);
         if (existingDiscount.discount_code) {
           return interaction.reply({
             content: `A code has already been applied to this order: ${existingDiscount.discount_code}`,
-            ephemeral: true,
+            flags: 64,
           });
         }
 
@@ -2735,7 +2807,7 @@ client.on("interactionCreate", async (interaction) => {
         if (!validation.valid) {
           return interaction.reply({
             content: validation.reason,
-            ephemeral: true,
+            flags: 64,
           });
         }
 
@@ -2759,9 +2831,9 @@ client.on("interactionCreate", async (interaction) => {
       if (deferred || interaction.deferred) {
         await interaction.editReply(msg);
       } else if (interaction.replied) {
-        await interaction.followUp({ content: msg, ephemeral: true });
+        await interaction.followUp({ content: msg, flags: 64 });
       } else {
-        await interaction.reply({ content: msg, ephemeral: true });
+        await interaction.reply({ content: msg, flags: 64 });
       }
     } catch {}
   }
