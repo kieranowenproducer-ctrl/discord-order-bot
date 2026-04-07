@@ -1,5 +1,5 @@
 // index.js
-// Discord Draft Store Bot (discord.js v14 + Postgres)
+// Discord Store Bot (discord.js v14 + Postgres)
 
 const {
   Client,
@@ -48,7 +48,7 @@ const BANK_BANK_NAME = process.env.BANK_BANK_NAME || "YOUR BANK";
 const BANK_IBAN = process.env.BANK_IBAN || "";
 const BANK_SWIFT = process.env.BANK_SWIFT || "";
 
-const STORE_NAME = process.env.STORE_NAME || "Draft Store";
+const STORE_NAME = process.env.STORE_NAME || "BodyMarket Labs";
 const DEFAULT_SIZE = "Standard";
 const DEFAULT_COLOR = "Standard";
 
