@@ -234,6 +234,11 @@ function safeText(str, max = 80) {
   return String(str || "").slice(0, max);
 }
 
+function nullIfBlank(value) {
+  const str = String(value || "").trim();
+  return str ? str : null;
+}
+
 function parsePriceToPence(input) {
   const cleaned = String(input || "").trim().replace(/£/g, "");
   const value = Number(cleaned);
@@ -390,6 +395,137 @@ function splitLongMessage(content, maxLength = 1900) {
 
   if (current.length) chunks.push(current);
   return chunks;
+}
+
+function formatFullShippingInfo({ fullName, email, phone, fullAddress, country }) {
+  return [
+    nullIfBlank(fullName),
+    nullIfBlank(email),
+    nullIfBlank(phone),
+    nullIfBlank(fullAddress),
+    nullIfBlank(country),
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function formatConsentValue(value) {
+  if (value === true) return "Yes";
+  if (value === false) return "No";
+  return "Not recorded";
+}
+
+function formatOptOutValue(value) {
+  return value ? "Yes" : "No";
+}
+
+function formatDiscordTimestamp(value, fallback = "None") {
+  if (!value) return fallback;
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return fallback;
+
+  return `<t:${Math.floor(date.getTime() / 1000)}:F>`;
+}
+
+function leadDisplayName(lead) {
+  return (
+    nullIfBlank(lead?.full_name) ||
+    nullIfBlank(lead?.username) ||
+    nullIfBlank(lead?.email) ||
+    nullIfBlank(lead?.phone) ||
+    nullIfBlank(lead?.discord_user_id) ||
+    "Unknown"
+  );
+}
+
+function truncateForField(value, max = 1024, fallback = "None") {
+  const str = String(value || "").trim();
+  if (!str) return fallback;
+  if (str.length <= max) return str;
+  return `${str.slice(0, Math.max(0, max - 3))}...`;
+}
+
+function escapeCsvValue(value) {
+  if (value === null || value === undefined) return "";
+  const str = String(value);
+  if (str.includes('"') || str.includes(",") || str.includes("\n") || str.includes("\r")) {
+    return `"${str.replace(/"/g, '""')}"`;
+  }
+  return str;
+}
+
+function formatCsvDate(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toISOString();
+}
+
+function buildCustomerLeadCsv(rows) {
+  const headers = [
+    "discord_user_id",
+    "username",
+    "full_name",
+    "email",
+    "phone",
+    "full_shipping_info",
+    "country",
+    "first_order_date",
+    "last_order_date",
+    "total_orders",
+    "marketing_consent_status",
+    "marketing_consent_timestamp",
+    "marketing_consent_source",
+    "opt_out_status",
+    "updated_at",
+  ];
+
+  const lines = [headers.join(",")];
+
+  for (const row of rows) {
+    lines.push(
+      [
+        row.discord_user_id,
+        row.username,
+        row.full_name,
+        row.email,
+        row.phone,
+        row.full_shipping_info,
+        row.country,
+        formatCsvDate(row.first_order_date),
+        formatCsvDate(row.last_order_date),
+        Number(row.total_orders || 0),
+        row.marketing_consent_status === null || row.marketing_consent_status === undefined
+          ? ""
+          : row.marketing_consent_status,
+        formatCsvDate(row.marketing_consent_timestamp),
+        row.marketing_consent_source,
+        Boolean(row.opt_out_status),
+        formatCsvDate(row.updated_at),
+      ]
+        .map(escapeCsvValue)
+        .join(",")
+    );
+  }
+
+  return lines.join("\n");
+}
+
+function buildCustomerLeadCsvFile(rows, fileName) {
+  const csv = buildCustomerLeadCsv(rows);
+  return {
+    attachment: Buffer.from(csv, "utf8"),
+    name: fileName,
+  };
+}
+
+function customerExportPanelText() {
+  return (
+    `🟣 **Customers / Leads**\n\n` +
+    `Main workflow is now export based.\n` +
+    `Use CSV exports for lead lists and keep lookup for one off searches.`
+  );
 }
 
 /* -------------------------- MODERATION HELPERS -------------------------- */
@@ -660,7 +796,7 @@ function buildMemberDetailComponents(member, view, page = 0) {
 
 async function seedOrRepairCatalog() {
   for (const [categoryName, items] of Object.entries(SAFE_SEED_CATALOG)) {
-    let categoryRes = await pool.query(
+    const categoryRes = await pool.query(
       `SELECT category_id FROM categories WHERE category_name = $1 LIMIT 1`,
       [categoryName]
     );
@@ -836,6 +972,31 @@ async function initDb() {
   `);
 
   await pool.query(`
+    ALTER TABLE orders
+    ADD COLUMN IF NOT EXISTS username TEXT;
+  `);
+
+  await pool.query(`
+    ALTER TABLE orders
+    ADD COLUMN IF NOT EXISTS marketing_consent_status BOOLEAN;
+  `);
+
+  await pool.query(`
+    ALTER TABLE orders
+    ADD COLUMN IF NOT EXISTS marketing_consent_timestamp TIMESTAMPTZ;
+  `);
+
+  await pool.query(`
+    ALTER TABLE orders
+    ADD COLUMN IF NOT EXISTS marketing_consent_source TEXT;
+  `);
+
+  await pool.query(`
+    ALTER TABLE orders
+    ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+  `);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS order_items (
       id BIGSERIAL PRIMARY KEY,
       order_id BIGINT NOT NULL REFERENCES orders(order_id) ON DELETE CASCADE,
@@ -846,6 +1007,127 @@ async function initDb() {
       qty INT NOT NULL CHECK (qty > 0),
       price_pence INT NOT NULL CHECK (price_pence >= 0)
     );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS customer_leads (
+      discord_user_id TEXT PRIMARY KEY,
+      username TEXT,
+      full_name TEXT,
+      email TEXT,
+      phone TEXT,
+      full_shipping_info TEXT,
+      country TEXT,
+      first_order_date TIMESTAMPTZ,
+      last_order_date TIMESTAMPTZ,
+      total_orders INT NOT NULL DEFAULT 0,
+      marketing_consent_status BOOLEAN,
+      marketing_consent_timestamp TIMESTAMPTZ,
+      marketing_consent_source TEXT,
+      opt_out_status BOOLEAN NOT NULL DEFAULT FALSE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
+    ALTER TABLE customer_leads
+    ADD COLUMN IF NOT EXISTS username TEXT;
+  `);
+
+  await pool.query(`
+    ALTER TABLE customer_leads
+    ADD COLUMN IF NOT EXISTS full_name TEXT;
+  `);
+
+  await pool.query(`
+    ALTER TABLE customer_leads
+    ADD COLUMN IF NOT EXISTS email TEXT;
+  `);
+
+  await pool.query(`
+    ALTER TABLE customer_leads
+    ADD COLUMN IF NOT EXISTS phone TEXT;
+  `);
+
+  await pool.query(`
+    ALTER TABLE customer_leads
+    ADD COLUMN IF NOT EXISTS full_shipping_info TEXT;
+  `);
+
+  await pool.query(`
+    ALTER TABLE customer_leads
+    ADD COLUMN IF NOT EXISTS country TEXT;
+  `);
+
+  await pool.query(`
+    ALTER TABLE customer_leads
+    ADD COLUMN IF NOT EXISTS first_order_date TIMESTAMPTZ;
+  `);
+
+  await pool.query(`
+    ALTER TABLE customer_leads
+    ADD COLUMN IF NOT EXISTS last_order_date TIMESTAMPTZ;
+  `);
+
+  await pool.query(`
+    ALTER TABLE customer_leads
+    ADD COLUMN IF NOT EXISTS total_orders INT NOT NULL DEFAULT 0;
+  `);
+
+  await pool.query(`
+    ALTER TABLE customer_leads
+    ADD COLUMN IF NOT EXISTS marketing_consent_status BOOLEAN;
+  `);
+
+  await pool.query(`
+    ALTER TABLE customer_leads
+    ADD COLUMN IF NOT EXISTS marketing_consent_timestamp TIMESTAMPTZ;
+  `);
+
+  await pool.query(`
+    ALTER TABLE customer_leads
+    ADD COLUMN IF NOT EXISTS marketing_consent_source TEXT;
+  `);
+
+  await pool.query(`
+    ALTER TABLE customer_leads
+    ADD COLUMN IF NOT EXISTS opt_out_status BOOLEAN NOT NULL DEFAULT FALSE;
+  `);
+
+  await pool.query(`
+    ALTER TABLE customer_leads
+    ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+  `);
+
+  await pool.query(`
+    ALTER TABLE customer_leads
+    ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_customer_leads_email
+    ON customer_leads (email);
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_customer_leads_phone
+    ON customer_leads (phone);
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_customer_leads_username
+    ON customer_leads (username);
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_customer_leads_last_order_date
+    ON customer_leads (last_order_date DESC);
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_customer_leads_updated_at
+    ON customer_leads (updated_at DESC);
   `);
 
   await pool.query(`
@@ -1355,6 +1637,472 @@ async function createProductRequestRecord(userId, username, requestedProduct, ex
   return res.rows[0];
 }
 
+/* ------------------------- CUSTOMER / LEADS HELPERS --------------------- */
+
+async function upsertCustomerLeadProfile({
+  userId,
+  username,
+  fullName,
+  email,
+  phone,
+  fullAddress,
+  country,
+  marketingConsentStatus = null,
+  marketingConsentTimestamp = null,
+  marketingConsentSource = null,
+}) {
+  const cleanUserId = String(userId || "").trim();
+  if (!cleanUserId) {
+    throw new Error("User ID is required for customer lead upsert.");
+  }
+
+  const cleanUsername = nullIfBlank(username);
+  const cleanFullName = nullIfBlank(fullName);
+  const cleanEmail = nullIfBlank(email);
+  const cleanPhone = nullIfBlank(phone);
+  const cleanFullAddress = nullIfBlank(fullAddress);
+  const cleanCountry = nullIfBlank(country);
+
+  const fullShippingInfo = formatFullShippingInfo({
+    fullName: cleanFullName,
+    email: cleanEmail,
+    phone: cleanPhone,
+    fullAddress: cleanFullAddress,
+    country: cleanCountry,
+  });
+
+  const hasConsentValue = typeof marketingConsentStatus === "boolean";
+  const consentTimestamp = hasConsentValue ? marketingConsentTimestamp || new Date() : null;
+  const consentSource = hasConsentValue ? nullIfBlank(marketingConsentSource) : null;
+
+  await pool.query(
+    `
+    INSERT INTO customer_leads (
+      discord_user_id,
+      username,
+      full_name,
+      email,
+      phone,
+      full_shipping_info,
+      country,
+      marketing_consent_status,
+      marketing_consent_timestamp,
+      marketing_consent_source,
+      opt_out_status,
+      updated_at
+    )
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
+    ON CONFLICT (discord_user_id) DO UPDATE
+    SET username = COALESCE(EXCLUDED.username, customer_leads.username),
+        full_name = COALESCE(EXCLUDED.full_name, customer_leads.full_name),
+        email = COALESCE(EXCLUDED.email, customer_leads.email),
+        phone = COALESCE(EXCLUDED.phone, customer_leads.phone),
+        full_shipping_info = COALESCE(EXCLUDED.full_shipping_info, customer_leads.full_shipping_info),
+        country = COALESCE(EXCLUDED.country, customer_leads.country),
+        marketing_consent_status = CASE
+          WHEN EXCLUDED.marketing_consent_status IS NULL THEN customer_leads.marketing_consent_status
+          ELSE EXCLUDED.marketing_consent_status
+        END,
+        marketing_consent_timestamp = CASE
+          WHEN EXCLUDED.marketing_consent_status IS NULL THEN customer_leads.marketing_consent_timestamp
+          ELSE EXCLUDED.marketing_consent_timestamp
+        END,
+        marketing_consent_source = CASE
+          WHEN EXCLUDED.marketing_consent_status IS NULL THEN customer_leads.marketing_consent_source
+          ELSE EXCLUDED.marketing_consent_source
+        END,
+        opt_out_status = CASE
+          WHEN EXCLUDED.marketing_consent_status = FALSE THEN TRUE
+          WHEN EXCLUDED.marketing_consent_status = TRUE THEN FALSE
+          ELSE customer_leads.opt_out_status
+        END,
+        updated_at = NOW()
+    `,
+    [
+      cleanUserId,
+      cleanUsername,
+      cleanFullName,
+      cleanEmail,
+      cleanPhone,
+      nullIfBlank(fullShippingInfo),
+      cleanCountry,
+      hasConsentValue ? marketingConsentStatus : null,
+      consentTimestamp,
+      consentSource,
+      hasConsentValue ? !marketingConsentStatus : false,
+    ]
+  );
+}
+
+async function recordCustomerLeadOrder({
+  userId,
+  username,
+  fullName,
+  email,
+  phone,
+  fullAddress,
+  country,
+  marketingConsentStatus = null,
+  marketingConsentTimestamp = null,
+  marketingConsentSource = null,
+  orderCreatedAt = new Date(),
+}) {
+  const cleanUserId = String(userId || "").trim();
+  if (!cleanUserId) {
+    throw new Error("User ID is required for customer lead order recording.");
+  }
+
+  const cleanUsername = nullIfBlank(username);
+  const cleanFullName = nullIfBlank(fullName);
+  const cleanEmail = nullIfBlank(email);
+  const cleanPhone = nullIfBlank(phone);
+  const cleanFullAddress = nullIfBlank(fullAddress);
+  const cleanCountry = nullIfBlank(country);
+
+  const fullShippingInfo = formatFullShippingInfo({
+    fullName: cleanFullName,
+    email: cleanEmail,
+    phone: cleanPhone,
+    fullAddress: cleanFullAddress,
+    country: cleanCountry,
+  });
+
+  const hasConsentValue = typeof marketingConsentStatus === "boolean";
+  const consentTimestamp = hasConsentValue ? marketingConsentTimestamp || orderCreatedAt || new Date() : null;
+  const consentSource = hasConsentValue ? nullIfBlank(marketingConsentSource) : null;
+
+  await pool.query(
+    `
+    INSERT INTO customer_leads (
+      discord_user_id,
+      username,
+      full_name,
+      email,
+      phone,
+      full_shipping_info,
+      country,
+      first_order_date,
+      last_order_date,
+      total_orders,
+      marketing_consent_status,
+      marketing_consent_timestamp,
+      marketing_consent_source,
+      opt_out_status,
+      updated_at
+    )
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, 1, $9, $10, $11, $12, NOW())
+    ON CONFLICT (discord_user_id) DO UPDATE
+    SET username = COALESCE(EXCLUDED.username, customer_leads.username),
+        full_name = COALESCE(EXCLUDED.full_name, customer_leads.full_name),
+        email = COALESCE(EXCLUDED.email, customer_leads.email),
+        phone = COALESCE(EXCLUDED.phone, customer_leads.phone),
+        full_shipping_info = COALESCE(EXCLUDED.full_shipping_info, customer_leads.full_shipping_info),
+        country = COALESCE(EXCLUDED.country, customer_leads.country),
+        first_order_date = COALESCE(customer_leads.first_order_date, EXCLUDED.first_order_date),
+        last_order_date = CASE
+          WHEN customer_leads.last_order_date IS NULL THEN EXCLUDED.last_order_date
+          WHEN EXCLUDED.last_order_date IS NULL THEN customer_leads.last_order_date
+          ELSE GREATEST(customer_leads.last_order_date, EXCLUDED.last_order_date)
+        END,
+        total_orders = customer_leads.total_orders + 1,
+        marketing_consent_status = CASE
+          WHEN EXCLUDED.marketing_consent_status IS NULL THEN customer_leads.marketing_consent_status
+          ELSE EXCLUDED.marketing_consent_status
+        END,
+        marketing_consent_timestamp = CASE
+          WHEN EXCLUDED.marketing_consent_status IS NULL THEN customer_leads.marketing_consent_timestamp
+          ELSE EXCLUDED.marketing_consent_timestamp
+        END,
+        marketing_consent_source = CASE
+          WHEN EXCLUDED.marketing_consent_status IS NULL THEN customer_leads.marketing_consent_source
+          ELSE EXCLUDED.marketing_consent_source
+        END,
+        opt_out_status = CASE
+          WHEN EXCLUDED.marketing_consent_status = FALSE THEN TRUE
+          WHEN EXCLUDED.marketing_consent_status = TRUE THEN FALSE
+          ELSE customer_leads.opt_out_status
+        END,
+        updated_at = NOW()
+    `,
+    [
+      cleanUserId,
+      cleanUsername,
+      cleanFullName,
+      cleanEmail,
+      cleanPhone,
+      nullIfBlank(fullShippingInfo),
+      cleanCountry,
+      orderCreatedAt,
+      hasConsentValue ? marketingConsentStatus : null,
+      consentTimestamp,
+      consentSource,
+      hasConsentValue ? !marketingConsentStatus : false,
+    ]
+  );
+}
+
+async function updateCustomerLeadConsent(userId, consentStatus, source = "shop_checkout") {
+  const cleanUserId = String(userId || "").trim();
+  if (!cleanUserId) {
+    throw new Error("User ID is required for consent update.");
+  }
+
+  const hasConsentValue = typeof consentStatus === "boolean";
+  if (!hasConsentValue) return;
+
+  await pool.query(
+    `
+    INSERT INTO customer_leads (
+      discord_user_id,
+      marketing_consent_status,
+      marketing_consent_timestamp,
+      marketing_consent_source,
+      opt_out_status,
+      updated_at
+    )
+    VALUES ($1, $2, NOW(), $3, $4, NOW())
+    ON CONFLICT (discord_user_id) DO UPDATE
+    SET marketing_consent_status = EXCLUDED.marketing_consent_status,
+        marketing_consent_timestamp = EXCLUDED.marketing_consent_timestamp,
+        marketing_consent_source = EXCLUDED.marketing_consent_source,
+        opt_out_status = EXCLUDED.opt_out_status,
+        updated_at = NOW()
+    `,
+    [cleanUserId, consentStatus, nullIfBlank(source), !consentStatus]
+  );
+}
+
+async function getCustomerLeadByUserId(userId) {
+  const res = await pool.query(
+    `
+    SELECT
+      discord_user_id,
+      username,
+      full_name,
+      email,
+      phone,
+      full_shipping_info,
+      country,
+      first_order_date,
+      last_order_date,
+      total_orders,
+      marketing_consent_status,
+      marketing_consent_timestamp,
+      marketing_consent_source,
+      opt_out_status,
+      created_at,
+      updated_at
+    FROM customer_leads
+    WHERE discord_user_id = $1
+    LIMIT 1
+    `,
+    [userId]
+  );
+
+  return res.rows[0] || null;
+}
+
+async function getRecentCustomerLeads(limit = 10) {
+  const safeLimit = Math.max(1, Math.min(100, Number(limit || 10)));
+
+  const res = await pool.query(
+    `
+    SELECT
+      discord_user_id,
+      username,
+      full_name,
+      email,
+      phone,
+      full_shipping_info,
+      country,
+      first_order_date,
+      last_order_date,
+      total_orders,
+      marketing_consent_status,
+      marketing_consent_timestamp,
+      marketing_consent_source,
+      opt_out_status,
+      created_at,
+      updated_at
+    FROM customer_leads
+    ORDER BY
+      COALESCE(last_order_date, updated_at, created_at) DESC,
+      updated_at DESC,
+      created_at DESC
+    LIMIT $1
+    `,
+    [safeLimit]
+  );
+
+  return res.rows;
+}
+
+async function getCustomerLeadExportRows(exportType = "all") {
+  let whereSql = "";
+  if (exportType === "marketing_yes") {
+    whereSql = `WHERE marketing_consent_status = TRUE`;
+  } else if (exportType === "ordered") {
+    whereSql = `WHERE COALESCE(total_orders, 0) > 0`;
+  }
+
+  const res = await pool.query(`
+    SELECT
+      discord_user_id,
+      username,
+      full_name,
+      email,
+      phone,
+      full_shipping_info,
+      country,
+      first_order_date,
+      last_order_date,
+      total_orders,
+      marketing_consent_status,
+      marketing_consent_timestamp,
+      marketing_consent_source,
+      opt_out_status,
+      created_at,
+      updated_at
+    FROM customer_leads
+    ${whereSql}
+    ORDER BY
+      COALESCE(last_order_date, updated_at, created_at) DESC,
+      updated_at DESC,
+      created_at DESC,
+      total_orders DESC,
+      full_name ASC NULLS LAST
+  `);
+
+  return res.rows;
+}
+
+async function findCustomerLeadByLookupValue(lookupValue) {
+  const needle = String(lookupValue || "").trim();
+  if (!needle) return null;
+
+  const exactRes = await pool.query(
+    `
+    SELECT
+      discord_user_id,
+      username,
+      full_name,
+      email,
+      phone,
+      full_shipping_info,
+      country,
+      first_order_date,
+      last_order_date,
+      total_orders,
+      marketing_consent_status,
+      marketing_consent_timestamp,
+      marketing_consent_source,
+      opt_out_status,
+      created_at,
+      updated_at
+    FROM customer_leads
+    WHERE discord_user_id = $1
+       OR LOWER(COALESCE(email, '')) = LOWER($1)
+       OR LOWER(COALESCE(phone, '')) = LOWER($1)
+       OR LOWER(COALESCE(username, '')) = LOWER($1)
+       OR LOWER(COALESCE(full_name, '')) = LOWER($1)
+    ORDER BY COALESCE(last_order_date, updated_at, created_at) DESC
+    LIMIT 1
+    `,
+    [needle]
+  );
+
+  if (exactRes.rows.length) {
+    return exactRes.rows[0];
+  }
+
+  const likeNeedle = `%${needle.toLowerCase()}%`;
+  const fuzzyRes = await pool.query(
+    `
+    SELECT
+      discord_user_id,
+      username,
+      full_name,
+      email,
+      phone,
+      full_shipping_info,
+      country,
+      first_order_date,
+      last_order_date,
+      total_orders,
+      marketing_consent_status,
+      marketing_consent_timestamp,
+      marketing_consent_source,
+      opt_out_status,
+      created_at,
+      updated_at
+    FROM customer_leads
+    WHERE LOWER(COALESCE(full_name, '')) LIKE $1
+       OR LOWER(COALESCE(email, '')) LIKE $1
+       OR LOWER(COALESCE(phone, '')) LIKE $1
+       OR LOWER(COALESCE(username, '')) LIKE $1
+       OR LOWER(COALESCE(discord_user_id, '')) LIKE $1
+    ORDER BY COALESCE(last_order_date, updated_at, created_at) DESC
+    LIMIT 1
+    `,
+    [likeNeedle]
+  );
+
+  return fuzzyRes.rows[0] || null;
+}
+
+function buildCustomerLeadLookupEmbed(lead) {
+  return new EmbedBuilder()
+    .setTitle("Customer / Lead")
+    .addFields(
+      { name: "Discord User ID", value: truncateForField(lead.discord_user_id, 1024, "Unknown"), inline: true },
+      { name: "Username", value: truncateForField(lead.username, 1024, "Unknown"), inline: true },
+      { name: "Total Orders", value: String(Number(lead.total_orders || 0)), inline: true },
+      { name: "Full Name", value: truncateForField(lead.full_name, 1024, "Unknown"), inline: true },
+      { name: "Email", value: truncateForField(lead.email, 1024, "Unknown"), inline: true },
+      { name: "Phone", value: truncateForField(lead.phone, 1024, "Unknown"), inline: true },
+      {
+        name: "First Order Date",
+        value: formatDiscordTimestamp(lead.first_order_date, "None"),
+        inline: true,
+      },
+      {
+        name: "Last Order Date",
+        value: formatDiscordTimestamp(lead.last_order_date, "None"),
+        inline: true,
+      },
+      {
+        name: "Marketing Consent",
+        value: formatConsentValue(lead.marketing_consent_status),
+        inline: true,
+      },
+      {
+        name: "Consent Timestamp",
+        value: formatDiscordTimestamp(lead.marketing_consent_timestamp, "None"),
+        inline: true,
+      },
+      {
+        name: "Opt Out",
+        value: formatOptOutValue(lead.opt_out_status),
+        inline: true,
+      },
+      {
+        name: "Country",
+        value: truncateForField(lead.country, 1024, "Unknown"),
+        inline: true,
+      },
+      {
+        name: "Consent Source",
+        value: truncateForField(lead.marketing_consent_source, 1024, "None"),
+        inline: true,
+      },
+      {
+        name: "Shipping Info",
+        value: truncateForField(lead.full_shipping_info, 1024, "None stored"),
+      }
+    )
+    .setTimestamp(new Date(lead.updated_at || lead.created_at || Date.now()));
+}
+
 /* ------------------------------- CART HELPERS --------------------------- */
 
 async function getStockForSku(sku) {
@@ -1401,18 +2149,25 @@ async function addCartItem(userId, item) {
   const existingCartQty = await getCartQtyForSku(userId, item.sku);
 
   if (existingCartQty + item.qty > stockQty) {
-    throw new Error(`Only ${stockQty} in stock for ${item.name}.`);
+    return {
+      error: true,
+      message: `Only ${stockQty} left in stock for ${item.name}.`,
+    };
   }
 
   const cartId = await getOrCreateCart(userId);
 
-  await pool.query(
-    `
-    INSERT INTO cart_items (cart_id, sku, name, size, color, qty, price_pence)
-    VALUES ($1, $2, $3, $4, $5, $6, $7)
-    `,
-    [cartId, item.sku, item.name, item.size, item.color, item.qty, item.price_pence]
-  );
+await pool.query(
+  `
+  INSERT INTO cart_items (cart_id, sku, name, size, color, qty, price_pence)
+  VALUES ($1, $2, $3, $4, $5, $6, $7)
+  ON CONFLICT (cart_id, sku, size, color)
+  DO UPDATE SET qty = cart_items.qty + EXCLUDED.qty
+  `,
+  [cartId, item.sku, item.name, item.size, item.color, item.qty, item.price_pence]
+);
+
+  return { error: false };
 }
 
 async function getCartSummary(userId) {
@@ -1440,7 +2195,22 @@ async function getCartSummary(userId) {
   return { items, subtotal_pence };
 }
 
-async function upsertProfile(userId, fullName, email, phone, shipping) {
+async function upsertProfile(
+  userId,
+  username,
+  fullName,
+  email,
+  phone,
+  shipping,
+  marketingConsentStatus = null,
+  marketingConsentSource = null
+) {
+  const cleanFullName = nullIfBlank(fullName);
+  const cleanEmail = nullIfBlank(email);
+  const cleanPhone = nullIfBlank(phone);
+  const cleanFullAddress = nullIfBlank(shipping?.full_address);
+  const cleanCountry = nullIfBlank(shipping?.country);
+
   await pool.query(
     `
     INSERT INTO user_profiles (user_id, full_name, email, phone, updated_at)
@@ -1451,7 +2221,7 @@ async function upsertProfile(userId, fullName, email, phone, shipping) {
         phone = EXCLUDED.phone,
         updated_at = NOW()
     `,
-    [userId, fullName, email, phone]
+    [userId, cleanFullName, cleanEmail, cleanPhone]
   );
 
   await pool.query(
@@ -1463,8 +2233,22 @@ async function upsertProfile(userId, fullName, email, phone, shipping) {
         country = EXCLUDED.country,
         updated_at = NOW()
     `,
-    [userId, shipping.full_address, shipping.country]
+    [userId, cleanFullAddress, cleanCountry]
   );
+
+  await upsertCustomerLeadProfile({
+    userId,
+    username,
+    fullName: cleanFullName,
+    email: cleanEmail,
+    phone: cleanPhone,
+    fullAddress: cleanFullAddress,
+    country: cleanCountry,
+    marketingConsentStatus,
+    marketingConsentTimestamp:
+      typeof marketingConsentStatus === "boolean" ? new Date() : null,
+    marketingConsentSource,
+  });
 }
 
 async function getUserShippingProfile(userId) {
@@ -1562,7 +2346,7 @@ async function hasUserPendingOrder(userId) {
     SELECT 1
     FROM orders
     WHERE user_id = $1
-      AND status IN ('pending', 'paid', 'dispatched')
+      AND status IN ('pending', 'paid')
     LIMIT 1
     `,
     [userId]
@@ -1641,7 +2425,8 @@ function receiptEmbed(
   shipping,
   total,
   shippingProfile,
-  status = "pending"
+  status = "pending",
+  marketingConsentStatus = null
 ) {
   const lines = items.map(
     (it) => `• **${it.name}** (${it.size}, ${it.color}) × ${it.qty} — ${money(it.qty * it.price_pence)}`
@@ -1671,6 +2456,11 @@ function receiptEmbed(
         `${shippingProfile.phone}\n` +
         `${shippingProfile.full_address}\n` +
         `${shippingProfile.country}`,
+    },
+    {
+      name: "Marketing Consent",
+      value: formatConsentValue(marketingConsentStatus),
+      inline: true,
     },
     {
       name: "Payment — Bank Transfer",
@@ -1902,6 +2692,22 @@ function staffOrderLookupModal() {
     .setRequired(true);
 
   modal.addComponents(new ActionRowBuilder().addComponents(orderIdInput));
+  return modal;
+}
+
+function staffCustomerLookupModal() {
+  const modal = new ModalBuilder()
+    .setCustomId("staff_customer_lookup_modal")
+    .setTitle("Lookup Customer / Lead");
+
+  const lookupInput = new TextInputBuilder()
+    .setCustomId("lookup_customer_value")
+    .setLabel("User ID, name, email, phone or @user")
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+    .setPlaceholder("Example: james@email.com or 123456789");
+
+  modal.addComponents(new ActionRowBuilder().addComponents(lookupInput));
   return modal;
 }
 
@@ -2420,12 +3226,15 @@ function staffMainPanel() {
     components: [
       new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId("staff_nav_orders").setLabel("Orders").setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId("staff_nav_products").setLabel("Products").setStyle(ButtonStyle.Success),
-        new ButtonBuilder().setCustomId("staff_nav_categories").setLabel("Categories").setStyle(ButtonStyle.Success)
+        new ButtonBuilder().setCustomId("staff_nav_customers").setLabel("Customers").setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId("staff_nav_products").setLabel("Products").setStyle(ButtonStyle.Success)
       ),
       new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId("staff_nav_categories").setLabel("Categories").setStyle(ButtonStyle.Success),
         new ButtonBuilder().setCustomId("staff_nav_stock").setLabel("Stock").setStyle(ButtonStyle.Success),
-        new ButtonBuilder().setCustomId("staff_nav_discounts").setLabel("Discounts").setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId("staff_nav_discounts").setLabel("Discounts").setStyle(ButtonStyle.Secondary)
+      ),
+      new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId("staff_nav_moderation").setLabel("Moderation").setStyle(ButtonStyle.Danger)
       ),
     ],
@@ -2494,6 +3303,35 @@ function staffOrdersPanel() {
     components: [
       new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId("staff_lookup_order").setLabel("Lookup Order").setStyle(ButtonStyle.Primary)
+      ),
+      navRow(),
+    ],
+  };
+}
+
+function staffCustomersPanel() {
+  return {
+    content: customerExportPanelText(),
+    components: [
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId("staff_export_all_leads_csv")
+          .setLabel("Export All Leads CSV")
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId("staff_export_marketing_yes_csv")
+          .setLabel("Export Marketing Yes CSV")
+          .setStyle(ButtonStyle.Success)
+      ),
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId("staff_export_ordered_customers_csv")
+          .setLabel("Export Ordered Customers CSV")
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId("staff_lookup_customer")
+          .setLabel("Lookup Customer")
+          .setStyle(ButtonStyle.Secondary)
       ),
       navRow(),
     ],
@@ -2749,7 +3587,7 @@ async function registerCommands() {
   await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
 }
 
-/* ------------------------------- DISCORD -------------------------------- */
+/* ----------------------------- DISCORD CORE ----------------------------- */
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
@@ -2781,10 +3619,11 @@ client.on("interactionCreate", async (interaction) => {
           `**How it works:**\n` +
           `1) Click the button below to get started\n` +
           `2) Enter your shipping details\n` +
-          `3) Browse categories and move back and forth freely\n` +
-          `4) Add multiple items to your basket\n` +
-          `5) Apply ${WELCOME_CODE} on your first order for ${WELCOME_DISCOUNT_PERCENT}% off\n` +
-          `6) Submit your order when you're done\n\n` +
+          `3) Choose your optional marketing preference\n` +
+          `4) Browse categories and move back and forth freely\n` +
+          `5) Add multiple items to your basket\n` +
+          `6) Apply ${WELCOME_CODE} on your first order for ${WELCOME_DISCOUNT_PERCENT}% off\n` +
+          `7) Submit your order when you're done\n\n` +
           `**Important payment note:**\n` +
           `A **screenshot of payment must be provided in your private order chat** as evidence before your order can be shipped.\n` +
           `Failure to provide payment proof may lead to delays.\n\n` +
@@ -2880,6 +3719,9 @@ client.on("interactionCreate", async (interaction) => {
         customId === "cart_discount" ||
         customId === "cart_clear" ||
         customId === "cart_submit" ||
+        customId === "marketing_consent_yes" ||
+        customId === "marketing_consent_no" ||
+        customId === "marketing_consent_skip" ||
         customId.startsWith("add_qty:") ||
         customId.startsWith("add_qty_other:") ||
         customId.startsWith("back_to_items:")
@@ -2898,6 +3740,482 @@ client.on("interactionCreate", async (interaction) => {
       if (customId === "product_request_open") {
         return interaction.showModal(productRequestModal());
       }
+
+      /* ----------------------- MARKETING CONSENT ------------------------ */
+
+      if (customId === "marketing_consent_yes") {
+        await updateCustomerLeadConsent(interaction.user.id, true, "shop_shipping_reply");
+
+        return interaction.update({
+          content:
+            "✅ Marketing preference saved: **Yes**\n\n" +
+            "You can continue from your private shop channel below.",
+          components: [
+            ...interaction.message.components.filter(
+              (row) => row.components?.some((c) => c.style === ButtonStyle.Link)
+            ),
+          ],
+        });
+      }
+
+      if (customId === "marketing_consent_no") {
+        await updateCustomerLeadConsent(interaction.user.id, false, "shop_shipping_reply");
+
+        return interaction.update({
+          content:
+            "✅ Marketing preference saved: **No**\n\n" +
+            "You can continue from your private shop channel below.",
+          components: [
+            ...interaction.message.components.filter(
+              (row) => row.components?.some((c) => c.style === ButtonStyle.Link)
+            ),
+          ],
+        });
+      }
+
+      if (customId === "marketing_consent_skip") {
+        return interaction.update({
+          content:
+            "Skipped for now.\n\n" +
+            "You can continue from your private shop channel below.",
+          components: [
+            ...interaction.message.components.filter(
+              (row) => row.components?.some((c) => c.style === ButtonStyle.Link)
+            ),
+          ],
+        });
+      }
+
+      /* -------------------------- STAFF NAVIGATION ------------------------- */
+
+      if (customId === "staff_panel_home") {
+        return interaction.update(staffMainPanel());
+      }
+
+      if (customId === "staff_nav_orders") {
+        return interaction.update(staffOrdersPanel());
+      }
+
+      if (customId === "staff_nav_customers") {
+        return interaction.update(staffCustomersPanel()); // updated panel used
+      }
+
+      if (customId === "staff_nav_products") {
+        return interaction.update(staffProductsPanel());
+      }
+
+      if (customId === "staff_nav_categories") {
+        return interaction.update(staffCategoriesPanel());
+      }
+
+      if (customId === "staff_nav_stock") {
+        return interaction.update(staffStockPanel());
+      }
+
+      if (customId === "staff_nav_discounts") {
+        return interaction.update(staffDiscountPanel());
+      }
+
+      if (customId === "staff_nav_moderation") {
+        return interaction.update(staffModerationPanel());
+      }
+
+      /* ---------------------- CUSTOMER EXPORT ACTIONS --------------------- */
+
+      if (customId === "staff_export_all_leads_csv") {
+        if (!isStaff(interaction.member)) {
+          return interaction.reply({ content: "Staff only.", flags: 64 });
+        }
+
+        await interaction.deferReply({ flags: 64 });
+
+        const rows = await getCustomerLeadExportRows("all");
+
+        return interaction.editReply({
+          content: `✅ Exported ${rows.length} lead record(s).`,
+          files: [buildCustomerLeadCsvFile(rows, "all_leads_export.csv")],
+        });
+      }
+
+      if (customId === "staff_export_marketing_yes_csv") {
+        if (!isStaff(interaction.member)) {
+          return interaction.reply({ content: "Staff only.", flags: 64 });
+        }
+
+        await interaction.deferReply({ flags: 64 });
+
+        const rows = await getCustomerLeadExportRows("marketing_yes");
+
+        return interaction.editReply({
+          content: `✅ Exported ${rows.length} marketing consent record(s).`,
+          files: [buildCustomerLeadCsvFile(rows, "marketing_yes_export.csv")],
+        });
+      }
+
+      if (customId === "staff_export_ordered_customers_csv") {
+        if (!isStaff(interaction.member)) {
+          return interaction.reply({ content: "Staff only.", flags: 64 });
+        }
+
+        await interaction.deferReply({ flags: 64 });
+
+        const rows = await getCustomerLeadExportRows("ordered");
+
+        return interaction.editReply({
+          content: `✅ Exported ${rows.length} ordered customer record(s).`,
+          files: [buildCustomerLeadCsvFile(rows, "ordered_customers_export.csv")],
+        });
+      }
+
+      if (customId === "staff_lookup_customer") {
+        return interaction.showModal(staffCustomerLookupModal());
+      }
+
+      /* -------------------------- SHOP BUTTONS --------------------------- */
+
+            if (customId === "browse_categories") {
+        return showCategoriesInSession(interaction, "Choose a category:");
+      }
+
+      if (customId === "shop_view_cart") {
+        return showCartInSession(interaction);
+      }
+
+      if (customId === "shop_close_session") {
+        await interaction.update({
+          content: "🗑️ Closing your shop session...",
+          components: [],
+        });
+
+        setTimeout(async () => {
+          await destroyShopSessionByChannel(
+            interaction.channel,
+            interaction.user.id,
+            "Shop session closed by user"
+          );
+        }, 1500);
+
+        return;
+      }
+
+      if (customId.startsWith("back_to_items:")) {
+        trackCartUiMessage(interaction.user.id, interaction.channel.id, interaction.message.id);
+
+        const [, categoryId] = customId.split(":");
+        const category = await getCategoryById(categoryId);
+        const itemComponents = await itemSelectComponents(categoryId);
+
+        return interaction.update({
+          content: `Category selected: **${category?.category_name || "Unknown"}**\nNow choose an item:`,
+          components: itemComponents,
+        });
+      }
+
+      if (customId.startsWith("add_qty:")) {
+        trackCartUiMessage(interaction.user.id, interaction.channel.id, interaction.message.id);
+
+        const [, categoryId, sku, qtyStr] = customId.split(":");
+        const qty = parseInt(qtyStr, 10);
+
+        const item = await getProductBySku(sku);
+        if (!item) {
+          return interaction.update({
+            content: "❌ Item not found.",
+            components: await categorySelectComponents(),
+          });
+        }
+
+        const stockQty = await getStockForSku(item.sku);
+        if (stockQty <= 0) {
+          return interaction.update({
+            content: "❌ That item is out of stock.",
+            components: await categorySelectComponents(),
+          });
+        }
+
+const addResult = await addCartItem(interaction.user.id, {
+  sku: item.sku,
+  name: item.product_name,
+  size: DEFAULT_SIZE,
+  color: DEFAULT_COLOR,
+  qty,
+  price_pence: item.price_pence,
+});
+
+if (addResult?.error) {
+  return interaction.update({
+    content: `❌ ${addResult.message}`,
+    components: await itemSelectComponents(categoryId),
+  });
+}
+
+        const content = await buildCartMessage(interaction.user.id);
+
+        return interaction.update({
+          content,
+          components: cartActionsComponents(),
+        });
+      }
+
+      if (customId.startsWith("add_qty_other:")) {
+        trackCartUiMessage(interaction.user.id, interaction.channel.id, interaction.message.id);
+        const [, categoryId, sku] = customId.split(":");
+        return interaction.showModal(qtyOtherModal(categoryId, sku));
+      }
+
+      if (customId === "cart_discount") {
+        trackCartUiMessage(interaction.user.id, interaction.channel.id, interaction.message.id);
+
+        const cart = await getCartSummary(interaction.user.id);
+        if (!cart.items.length) {
+          return interaction.update({
+            content:
+              "🗑️ **Basket empty**\n\n" +
+              "Your cart is empty.\n" +
+              "Choose a category below to start:",
+            components: await categorySelectComponents(),
+          });
+        }
+
+        return interaction.showModal(discountCodeModal());
+      }
+
+      if (customId === "cart_clear") {
+        trackCartUiMessage(interaction.user.id, interaction.channel.id, interaction.message.id);
+
+        await clearCart(interaction.user.id);
+
+        return interaction.update({
+          content:
+            "🗑️ **Basket cleared**\n\n" +
+            "All items have been removed and any applied discount code has been reset.\n" +
+            "You can continue shopping below:",
+          components: await categorySelectComponents(),
+        });
+      }
+
+      if (customId === "cart_submit") {
+        trackCartUiMessage(interaction.user.id, interaction.channel.id, interaction.message.id);
+
+        if (isSubmitLocked(interaction.user.id)) {
+          return interaction.update({
+            content: "Your order is already being processed. Please wait a few seconds.",
+            components: cartActionsComponents(true),
+          });
+        }
+
+        setSubmitLock(interaction.user.id);
+
+        try {
+          const existingPendingOrder = await hasUserPendingOrder(interaction.user.id);
+          if (existingPendingOrder) {
+            return interaction.update({
+              content: "You already have an order awaiting completion. Please contact staff if needed.",
+              components: cartActionsComponents(),
+            });
+          }
+
+          const cart = await getCartSummary(interaction.user.id);
+          if (!cart.items.length) {
+            return interaction.update({
+              content:
+                "🗑️ **Basket empty**\n\n" +
+                "Your cart is empty.\n" +
+                "Choose a category below to start:",
+              components: await categorySelectComponents(),
+            });
+          }
+
+          const shippingProfile = await getUserShippingProfile(interaction.user.id);
+          if (!shippingProfile) {
+            return interaction.update({
+              content: "I don't have your shipping details yet. Click the menu button again and enter your details.",
+              components: [],
+            });
+          }
+
+          for (const it of cart.items) {
+            const stockQty = await getStockForSku(it.sku);
+            if (it.qty > stockQty) {
+              return interaction.update({
+                content: `Stock changed. Only ${stockQty} left for ${it.name}. Please update your basket and try again.`,
+                components: cartActionsComponents(),
+              });
+            }
+          }
+
+          const subtotal = cart.subtotal_pence;
+          const shipping = getShippingPenceForCountry(shippingProfile.country);
+
+          let discount = await getCartDiscount(interaction.user.id);
+
+          if (discount.discount_code) {
+            const validation = await validateDiscountCodeForUser(interaction.user.id, discount.discount_code);
+
+            if (!validation.valid) {
+              await clearCartDiscount(interaction.user.id);
+              return interaction.update({
+                content: `${validation.reason} The code has been removed from this basket.`,
+                components: cartActionsComponents(),
+              });
+            }
+
+            if (Number(discount.discount_percent || 0) !== Number(validation.discount_percent || 0)) {
+              await setCartDiscount(interaction.user.id, validation.code, validation.discount_percent);
+              discount = await getCartDiscount(interaction.user.id);
+            }
+          }
+
+          const leadProfile = await getCustomerLeadByUserId(interaction.user.id);
+          const marketingConsentStatus =
+            typeof leadProfile?.marketing_consent_status === "boolean"
+              ? leadProfile.marketing_consent_status
+              : null;
+          const marketingConsentTimestamp =
+            marketingConsentStatus !== null ? leadProfile?.marketing_consent_timestamp || new Date() : null;
+          const marketingConsentSource =
+            marketingConsentStatus !== null
+              ? leadProfile?.marketing_consent_source || "shop_checkout"
+              : null;
+
+          const totals = calculateDiscountedTotals(subtotal, shipping, discount.discount_percent);
+          const total = totals.total;
+
+          const orderRes = await pool.query(
+            `
+            INSERT INTO orders (
+              user_id, username, full_name, email, phone, full_address, country,
+              subtotal_pence, shipping_pence, total_pence, discount_code,
+              discount_percent, discount_amount_pence, status,
+              marketing_consent_status, marketing_consent_timestamp, marketing_consent_source,
+              updated_at
+            )
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'pending',$14,$15,$16,NOW())
+            RETURNING order_id, created_at
+            `,
+            [
+              interaction.user.id,
+              interaction.user.tag,
+              shippingProfile.full_name,
+              shippingProfile.email,
+              shippingProfile.phone,
+              shippingProfile.full_address,
+              shippingProfile.country,
+              subtotal,
+              shipping,
+              total,
+              discount.discount_code,
+              discount.discount_percent,
+              totals.discountAmount,
+              marketingConsentStatus,
+              marketingConsentTimestamp,
+              marketingConsentSource,
+            ]
+          );
+
+          const orderId = orderRes.rows[0].order_id;
+          const orderCreatedAt = orderRes.rows[0].created_at || new Date();
+
+          for (const it of cart.items) {
+            await pool.query(
+              `
+              INSERT INTO order_items (order_id, sku, name, size, color, qty, price_pence)
+              VALUES ($1,$2,$3,$4,$5,$6,$7)
+              `,
+              [orderId, it.sku, it.name, it.size, it.color, it.qty, it.price_pence]
+            );
+
+            const stockUpdate = await pool.query(
+              `
+              UPDATE stock_items
+              SET stock_qty = stock_qty - $1,
+                  updated_at = NOW()
+              WHERE sku = $2 AND stock_qty >= $1
+              RETURNING sku
+              `,
+              [it.qty, it.sku]
+            );
+
+            if (!stockUpdate.rowCount) {
+              throw new Error(`Stock update failed for ${it.name}.`);
+            }
+          }
+
+          await recordCustomerLeadOrder({
+            userId: interaction.user.id,
+            username: interaction.user.tag,
+            fullName: shippingProfile.full_name,
+            email: shippingProfile.email,
+            phone: shippingProfile.phone,
+            fullAddress: shippingProfile.full_address,
+            country: shippingProfile.country,
+            marketingConsentStatus,
+            marketingConsentTimestamp,
+            marketingConsentSource,
+            orderCreatedAt,
+          });
+
+          if (discount.discount_code) {
+            await recordDiscountCodeUse(interaction.user.id, discount.discount_code, orderId);
+          }
+
+          const receiptChannel = await createReceiptChannel(interaction.guild, interaction.user, orderId);
+
+          await pool.query(`UPDATE orders SET receipt_channel_id=$1, updated_at=NOW() WHERE order_id=$2`, [
+            receiptChannel.id,
+            orderId,
+          ]);
+
+          await receiptChannel.send({
+            content:
+              `<@${interaction.user.id}> **Thanks!** Your order has been received.\n\n` +
+              `✅ Please pay by **bank transfer** using the details in the receipt below.\n` +
+              `✅ After payment, upload a **screenshot of payment** in this private order chat before your order can be shipped.\n` +
+              `⚠️ Use **only** your assigned order number as the bank transfer reference.\n` +
+              `⚠️ Do not include product names or any other wording in the reference.\n` +
+              `⚠️ Incorrect bank references may delay or cancel your order.\n\n` +
+              `<@&${STAFF_ROLE_ID}> once confirmed, please mark as paid or dispatched when appropriate.`,
+            embeds: [
+              receiptEmbed(
+                orderId,
+                cart.items,
+                subtotal,
+                totals.discountAmount,
+                discount.discount_code,
+                shipping,
+                total,
+                shippingProfile,
+                "pending",
+                marketingConsentStatus
+              ),
+            ],
+            components: staffReceiptControls(orderId, "pending"),
+          });
+
+          await interaction.update({
+            content: `✅ Order submitted successfully.\nYour receipt channel is ready: <#${receiptChannel.id}>`,
+            components: [],
+          });
+
+          clearShopSessionTimeout(interaction.user.id);
+          clearTrackedCartUiMessage(interaction.user.id);
+          clearTrackedShopSessionChannel(interaction.user.id);
+
+          setTimeout(async () => {
+            try {
+              await interaction.channel.delete("Shop session completed");
+            } catch (err) {
+              console.error("Failed to delete completed shop session channel:", err);
+            }
+          }, 2000);
+
+          return;
+        } finally {
+          clearSubmitLock(interaction.user.id);
+        }
+      }
+
+      /* ------------------------ VERIFICATION ACTIONS ---------------------- */
 
       if (customId.startsWith("verify_approve:")) {
         const [, targetUserId] = customId.split(":");
@@ -2927,40 +4245,12 @@ client.on("interactionCreate", async (interaction) => {
         });
 
         try {
-          await member.send(`✅ You have been verified in **${guild.name}** and should now have access to the full server.`);
+          await member.send(
+            `✅ You have been verified in **${guild.name}** and should now have access to the full server.`
+          );
         } catch {}
 
         return;
-      }
-
-      /* -------------------------- STAFF NAVIGATION ------------------------- */
-
-      if (customId === "staff_panel_home") {
-        return interaction.update(staffMainPanel());
-      }
-
-      if (customId === "staff_nav_orders") {
-        return interaction.update(staffOrdersPanel());
-      }
-
-      if (customId === "staff_nav_products") {
-        return interaction.update(staffProductsPanel());
-      }
-
-      if (customId === "staff_nav_categories") {
-        return interaction.update(staffCategoriesPanel());
-      }
-
-      if (customId === "staff_nav_stock") {
-        return interaction.update(staffStockPanel());
-      }
-
-      if (customId === "staff_nav_discounts") {
-        return interaction.update(staffDiscountPanel());
-      }
-
-      if (customId === "staff_nav_moderation") {
-        return interaction.update(staffModerationPanel());
       }
 
       /* --------------------------- STAFF ACTIONS -------------------------- */
@@ -3067,6 +4357,39 @@ client.on("interactionCreate", async (interaction) => {
 
       if (customId === "staff_lookup_order") {
         return interaction.showModal(staffOrderLookupModal());
+      }
+
+      if (customId === "staff_recent_customers") {
+        const leads = await getRecentCustomerLeads(10);
+
+        const description = leads.length
+          ? leads
+              .map((lead, index) => {
+                const displayName = leadDisplayName(lead);
+                const email = lead.email || "No email";
+                const phone = lead.phone || "No phone";
+                const consent = formatConsentValue(lead.marketing_consent_status);
+                const orders = Number(lead.total_orders || 0);
+                return (
+                  `${index + 1}. **${truncate100(displayName)}**\n` +
+                  `Email: ${truncate100(email)}\n` +
+                  `Phone: ${truncate100(phone)}\n` +
+                  `Consent: ${consent}\n` +
+                  `Orders: ${orders}`
+                );
+              })
+              .join("\n\n")
+          : "_No customer or lead records found_";
+
+        return interaction.update({
+          content: "Recent customers / leads:",
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("Recent Customers / Leads")
+              .setDescription(description),
+          ],
+          components: [navRow()],
+        });
       }
 
       if (customId === "staff_add_verified") {
@@ -3251,310 +4574,56 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
-      /* ---------------------------- SHOP BUTTONS --------------------------- */
+      if (customId.startsWith("staff_open_rename_product_modal:")) {
+        const [, sku] = customId.split(":");
+        const product = await getProductBySku(sku);
+        if (!product) return interaction.reply({ content: "Product not found.", flags: 64 });
 
-      if (customId === "browse_categories") {
-        return showCategoriesInSession(interaction, "Choose a category:");
+        return interaction.showModal(staffRenameProductModal(sku, product.product_name));
       }
 
-      if (customId === "shop_view_cart") {
-        return showCartInSession(interaction);
+      if (customId.startsWith("staff_open_price_modal:")) {
+        const [, sku] = customId.split(":");
+        const product = await getProductBySku(sku);
+        if (!product) return interaction.reply({ content: "Product not found.", flags: 64 });
+
+        return interaction.showModal(staffEditPriceModal(sku, product.price_pence));
       }
 
-      if (customId === "shop_close_session") {
-        await interaction.update({
-          content: "🗑️ Closing your shop session...",
-          components: [],
-        });
+      if (customId.startsWith("staff_open_stock_modal_direct:")) {
+        const [, sku] = customId.split(":");
+        const product = await getProductBySku(sku);
+        if (!product) return interaction.reply({ content: "Product not found.", flags: 64 });
 
-        setTimeout(async () => {
-          await destroyShopSessionByChannel(
-            interaction.channel,
-            interaction.user.id,
-            "Shop session closed by user"
-          );
-        }, 1500);
-
-        return;
+        return interaction.showModal(staffStockQtyModal(sku, product.product_name));
       }
 
-      if (customId.startsWith("back_to_items:")) {
-        trackCartUiMessage(interaction.user.id, interaction.channel.id, interaction.message.id);
-
-        const [, categoryId] = customId.split(":");
-        const category = await getCategoryById(categoryId);
-        const itemComponents = await itemSelectComponents(categoryId);
+      if (customId.startsWith("staff_open_move_product_flow:")) {
+        const [, sku] = customId.split(":");
+        const product = await getProductBySku(sku);
+        if (!product) return interaction.reply({ content: "Product not found.", flags: 64 });
 
         return interaction.update({
-          content: `Category selected: **${category?.category_name || "Unknown"}**\nNow choose an item:`,
-          components: itemComponents,
+          content: `Choose the new category for **${product.product_name}** (${sku}):`,
+          components: await staffCategorySelect(
+            `staff_move_product_select_category:${sku}`,
+            "Choose a new category…"
+          ),
         });
       }
 
-      if (customId.startsWith("add_qty:")) {
-        trackCartUiMessage(interaction.user.id, interaction.channel.id, interaction.message.id);
-
-        const [, categoryId, sku, qtyStr] = customId.split(":");
-        const qty = parseInt(qtyStr, 10);
-
-        const item = await getProductBySku(sku);
-        if (!item) {
-          return interaction.update({
-            content: "❌ Item not found.",
-            components: await categorySelectComponents(),
-          });
-        }
-
-        const stockQty = await getStockForSku(item.sku);
-        if (stockQty <= 0) {
-          return interaction.update({
-            content: "❌ That item is out of stock.",
-            components: await categorySelectComponents(),
-          });
-        }
-
-        await addCartItem(interaction.user.id, {
-          sku: item.sku,
-          name: item.product_name,
-          size: DEFAULT_SIZE,
-          color: DEFAULT_COLOR,
-          qty,
-          price_pence: item.price_pence,
-        });
-
-        const content = await buildCartMessage(interaction.user.id);
+      if (customId.startsWith("staff_delete_product_confirm:")) {
+        const [, sku] = customId.split(":");
+        const deleted = await deleteProduct(sku);
+        if (!deleted) return interaction.reply({ content: "Product not found.", flags: 64 });
 
         return interaction.update({
-          content,
-          components: cartActionsComponents(),
+          content: `✅ Deleted product **${deleted.product_name}** (${deleted.sku})`,
+          components: staffProductsPanel().components,
         });
       }
 
-      if (customId.startsWith("add_qty_other:")) {
-        trackCartUiMessage(interaction.user.id, interaction.channel.id, interaction.message.id);
-        const [, categoryId, sku] = customId.split(":");
-        return interaction.showModal(qtyOtherModal(categoryId, sku));
-      }
-
-      if (customId === "cart_discount") {
-        trackCartUiMessage(interaction.user.id, interaction.channel.id, interaction.message.id);
-
-        const cart = await getCartSummary(interaction.user.id);
-        if (!cart.items.length) {
-          return interaction.update({
-            content:
-              "🗑️ **Basket empty**\n\n" +
-              "Your cart is empty.\n" +
-              "Choose a category below to start:",
-            components: await categorySelectComponents(),
-          });
-        }
-
-        return interaction.showModal(discountCodeModal());
-      }
-
-      if (customId === "cart_clear") {
-        trackCartUiMessage(interaction.user.id, interaction.channel.id, interaction.message.id);
-
-        await clearCart(interaction.user.id);
-
-        return interaction.update({
-          content:
-            "🗑️ **Basket cleared**\n\n" +
-            "All items have been removed and any applied discount code has been reset.\n" +
-            "You can continue shopping below:",
-          components: await categorySelectComponents(),
-        });
-      }
-
-      if (customId === "cart_submit") {
-        trackCartUiMessage(interaction.user.id, interaction.channel.id, interaction.message.id);
-
-        if (isSubmitLocked(interaction.user.id)) {
-          return interaction.update({
-            content: "Your order is already being processed. Please wait a few seconds.",
-            components: cartActionsComponents(true),
-          });
-        }
-
-        setSubmitLock(interaction.user.id);
-
-        try {
-          const existingPendingOrder = await hasUserPendingOrder(interaction.user.id);
-          if (existingPendingOrder) {
-            return interaction.update({
-              content: "You already have an order awaiting completion. Please contact staff if needed.",
-              components: cartActionsComponents(),
-            });
-          }
-
-          const cart = await getCartSummary(interaction.user.id);
-          if (!cart.items.length) {
-            return interaction.update({
-              content:
-                "🗑️ **Basket empty**\n\n" +
-                "Your cart is empty.\n" +
-                "Choose a category below to start:",
-              components: await categorySelectComponents(),
-            });
-          }
-
-          const shippingProfile = await getUserShippingProfile(interaction.user.id);
-          if (!shippingProfile) {
-            return interaction.update({
-              content: "I don't have your shipping details yet. Click the menu button again and enter your details.",
-              components: [],
-            });
-          }
-
-          for (const it of cart.items) {
-            const stockQty = await getStockForSku(it.sku);
-            if (it.qty > stockQty) {
-              return interaction.update({
-                content: `Stock changed. Only ${stockQty} left for ${it.name}. Please update your basket and try again.`,
-                components: cartActionsComponents(),
-              });
-            }
-          }
-
-          const subtotal = cart.subtotal_pence;
-          const shipping = getShippingPenceForCountry(shippingProfile.country);
-
-          let discount = await getCartDiscount(interaction.user.id);
-
-          if (discount.discount_code) {
-            const validation = await validateDiscountCodeForUser(interaction.user.id, discount.discount_code);
-
-            if (!validation.valid) {
-              await clearCartDiscount(interaction.user.id);
-              return interaction.update({
-                content: `${validation.reason} The code has been removed from this basket.`,
-                components: cartActionsComponents(),
-              });
-            }
-
-            if (Number(discount.discount_percent || 0) !== Number(validation.discount_percent || 0)) {
-              await setCartDiscount(interaction.user.id, validation.code, validation.discount_percent);
-              discount = await getCartDiscount(interaction.user.id);
-            }
-          }
-
-          const totals = calculateDiscountedTotals(subtotal, shipping, discount.discount_percent);
-          const total = totals.total;
-
-          const orderRes = await pool.query(
-            `
-            INSERT INTO orders (
-              user_id, full_name, email, phone, full_address, country,
-              subtotal_pence, shipping_pence, total_pence, discount_code,
-              discount_percent, discount_amount_pence, status
-            )
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'pending')
-            RETURNING order_id
-            `,
-            [
-              interaction.user.id,
-              shippingProfile.full_name,
-              shippingProfile.email,
-              shippingProfile.phone,
-              shippingProfile.full_address,
-              shippingProfile.country,
-              subtotal,
-              shipping,
-              total,
-              discount.discount_code,
-              discount.discount_percent,
-              totals.discountAmount,
-            ]
-          );
-
-          const orderId = orderRes.rows[0].order_id;
-
-          for (const it of cart.items) {
-            await pool.query(
-              `
-              INSERT INTO order_items (order_id, sku, name, size, color, qty, price_pence)
-              VALUES ($1,$2,$3,$4,$5,$6,$7)
-              `,
-              [orderId, it.sku, it.name, it.size, it.color, it.qty, it.price_pence]
-            );
-
-            const stockUpdate = await pool.query(
-              `
-              UPDATE stock_items
-              SET stock_qty = stock_qty - $1,
-                  updated_at = NOW()
-              WHERE sku = $2 AND stock_qty >= $1
-              RETURNING sku
-              `,
-              [it.qty, it.sku]
-            );
-
-            if (!stockUpdate.rowCount) {
-              throw new Error(`Stock update failed for ${it.name}.`);
-            }
-          }
-
-          if (discount.discount_code) {
-            await recordDiscountCodeUse(interaction.user.id, discount.discount_code, orderId);
-          }
-
-          const receiptChannel = await createReceiptChannel(interaction.guild, interaction.user, orderId);
-
-          await pool.query(`UPDATE orders SET receipt_channel_id=$1 WHERE order_id=$2`, [
-            receiptChannel.id,
-            orderId,
-          ]);
-
-          await receiptChannel.send({
-            content:
-              `<@${interaction.user.id}> **Thanks!** Your order has been received.\n\n` +
-              `✅ Please pay by **bank transfer** using the details in the receipt below.\n` +
-              `✅ After payment, upload a **screenshot of payment** in this private order chat before your order can be shipped.\n` +
-              `⚠️ Use **only** your assigned order number as the bank transfer reference.\n` +
-              `⚠️ Do not include product names or any other wording in the reference.\n` +
-              `⚠️ Incorrect bank references may delay or cancel your order.\n\n` +
-              `<@&${STAFF_ROLE_ID}> once confirmed, please mark as paid or dispatched when appropriate.`,
-            embeds: [
-              receiptEmbed(
-                orderId,
-                cart.items,
-                subtotal,
-                totals.discountAmount,
-                discount.discount_code,
-                shipping,
-                total,
-                shippingProfile,
-                "pending"
-              ),
-            ],
-            components: staffReceiptControls(orderId, "pending"),
-          });
-
-          await interaction.update({
-            content: `✅ Order submitted successfully.\nYour receipt channel is ready: <#${receiptChannel.id}>`,
-            components: [],
-          });
-
-          clearShopSessionTimeout(interaction.user.id);
-          clearTrackedCartUiMessage(interaction.user.id);
-          clearTrackedShopSessionChannel(interaction.user.id);
-
-          setTimeout(async () => {
-            try {
-              await interaction.channel.delete("Shop session completed");
-            } catch (err) {
-              console.error("Failed to delete completed shop session channel:", err);
-            }
-          }, 2000);
-
-          return;
-        } finally {
-          clearSubmitLock(interaction.user.id);
-        }
-      }
-
-          /* ---------------------------- ORDER ACTIONS ------------------------- */
+      /* ---------------------------- ORDER ACTIONS ------------------------- */
 
       if (customId.startsWith("staff_mark_paid:")) {
         const [, orderIdStr] = customId.split(":");
@@ -3564,7 +4633,7 @@ client.on("interactionCreate", async (interaction) => {
           return interaction.reply({ content: "Staff only.", flags: 64 });
         }
 
-        await pool.query(`UPDATE orders SET status='paid' WHERE order_id=$1`, [orderId]);
+        await pool.query(`UPDATE orders SET status='paid', updated_at=NOW() WHERE order_id=$1`, [orderId]);
 
         await interaction.update({
           content: `✅ Order #${orderId} marked as paid.`,
@@ -3584,7 +4653,7 @@ client.on("interactionCreate", async (interaction) => {
           return interaction.reply({ content: "Staff only.", flags: 64 });
         }
 
-        await pool.query(`UPDATE orders SET status='dispatched' WHERE order_id=$1`, [orderId]);
+        await pool.query(`UPDATE orders SET status='dispatched', updated_at=NOW() WHERE order_id=$1`, [orderId]);
 
         await interaction.update({
           content: `📦 Order #${orderId} marked as dispatched.`,
@@ -3635,7 +4704,7 @@ client.on("interactionCreate", async (interaction) => {
           );
         }
 
-        await pool.query(`UPDATE orders SET status='cancelled' WHERE order_id=$1`, [orderId]);
+        await pool.query(`UPDATE orders SET status='cancelled', updated_at=NOW() WHERE order_id=$1`, [orderId]);
 
         await interaction.update({
           content: `❌ Order #${orderId} has been cancelled.`,
@@ -3685,7 +4754,7 @@ client.on("interactionCreate", async (interaction) => {
           });
         }
 
-        await pool.query(`UPDATE orders SET status='completed' WHERE order_id=$1`, [orderId]);
+        await pool.query(`UPDATE orders SET status='completed', updated_at=NOW() WHERE order_id=$1`, [orderId]);
 
         await interaction.update({
           content: `✅ Order #${orderId} marked as completed. Closing this channel in 5 seconds...`,
@@ -3704,57 +4773,6 @@ client.on("interactionCreate", async (interaction) => {
         }, 5000);
 
         return;
-      }
-
-      /* ----------------------- EXTRA PRODUCT BUTTONS ---------------------- */
-
-      if (customId.startsWith("staff_open_rename_product_modal:")) {
-        const [, sku] = customId.split(":");
-        const product = await getProductBySku(sku);
-        if (!product) return interaction.reply({ content: "Product not found.", flags: 64 });
-
-        return interaction.showModal(staffRenameProductModal(sku, product.product_name));
-      }
-
-      if (customId.startsWith("staff_open_price_modal:")) {
-        const [, sku] = customId.split(":");
-        const product = await getProductBySku(sku);
-        if (!product) return interaction.reply({ content: "Product not found.", flags: 64 });
-
-        return interaction.showModal(staffEditPriceModal(sku, product.price_pence));
-      }
-
-      if (customId.startsWith("staff_open_stock_modal_direct:")) {
-        const [, sku] = customId.split(":");
-        const product = await getProductBySku(sku);
-        if (!product) return interaction.reply({ content: "Product not found.", flags: 64 });
-
-        return interaction.showModal(staffStockQtyModal(sku, product.product_name));
-      }
-
-      if (customId.startsWith("staff_open_move_product_flow:")) {
-        const [, sku] = customId.split(":");
-        const product = await getProductBySku(sku);
-        if (!product) return interaction.reply({ content: "Product not found.", flags: 64 });
-
-        return interaction.update({
-          content: `Choose the new category for **${product.product_name}** (${sku}):`,
-          components: await staffCategorySelect(
-            `staff_move_product_select_category:${sku}`,
-            "Choose a new category…"
-          ),
-        });
-      }
-
-      if (customId.startsWith("staff_delete_product_confirm:")) {
-        const [, sku] = customId.split(":");
-        const deleted = await deleteProduct(sku);
-        if (!deleted) return interaction.reply({ content: "Product not found.", flags: 64 });
-
-        return interaction.update({
-          content: `✅ Deleted product **${deleted.product_name}** (${deleted.sku})`,
-          components: staffProductsPanel().components,
-        });
       }
     }
 
@@ -4184,7 +5202,14 @@ client.on("interactionCreate", async (interaction) => {
           return interaction.reply({ content: "All fields are required.", flags: 64 });
         }
 
-        await upsertProfile(interaction.user.id, full_name, email, phone, { full_address, country });
+        await upsertProfile(
+          interaction.user.id,
+          interaction.user.tag,
+          full_name,
+          email,
+          phone,
+          { full_address, country }
+        );
 
         const payload = {
           content: "✅ Details saved. Choose a category:",
@@ -4200,16 +5225,34 @@ client.on("interactionCreate", async (interaction) => {
             .setURL(`https://discord.com/channels/${interaction.guild.id}/${channel.id}`)
         );
 
+        const consentRow = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId("marketing_consent_yes")
+            .setLabel("Marketing: Yes")
+            .setStyle(ButtonStyle.Success),
+          new ButtonBuilder()
+            .setCustomId("marketing_consent_no")
+            .setLabel("Marketing: No")
+            .setStyle(ButtonStyle.Danger),
+          new ButtonBuilder()
+            .setCustomId("marketing_consent_skip")
+            .setLabel("Skip")
+            .setStyle(ButtonStyle.Secondary)
+        );
+
         await interaction.editReply({
-          content: `✅ Details saved. Your shop channel is ready.\nIt will auto close after 5 minutes of inactivity.`,
-          components: [continueOrderRow],
+          content:
+            `✅ Details saved. Your shop channel is ready.\n` +
+            `It will auto close after 5 minutes of inactivity.\n\n` +
+            `Optional: choose whether you want to receive future marketing updates.`,
+          components: [continueOrderRow, consentRow],
         });
 
         setTimeout(async () => {
           try {
             await interaction.deleteReply();
           } catch {}
-        }, 20000);
+        }, 30000);
 
         return;
       }
@@ -4456,12 +5499,13 @@ client.on("interactionCreate", async (interaction) => {
         const order = orderRes.rows[0];
 
         const itemsRes = await pool.query(
-          `SELECT name, qty, price_pence FROM order_items WHERE order_id=$1 ORDER BY id ASC`,
+          `SELECT name, qty, price_pence, sku, size, color FROM order_items WHERE order_id=$1 ORDER BY id ASC`,
           [orderId]
         );
 
         const itemLines = itemsRes.rows.map(
-          (it) => `• ${it.name} × ${it.qty} — ${money(it.qty * it.price_pence)}`
+          (it) =>
+            `• ${it.name} (${it.size}, ${it.color}) × ${it.qty} — ${money(it.qty * it.price_pence)} • SKU ${it.sku}`
         );
 
         const embed = new EmbedBuilder()
@@ -4470,9 +5514,38 @@ client.on("interactionCreate", async (interaction) => {
             { name: "Status", value: order.status || "unknown", inline: true },
             { name: "Total", value: money(order.total_pence || 0), inline: true },
             { name: "User ID", value: order.user_id || "unknown", inline: true },
+            { name: "Username", value: order.username || "Unknown", inline: true },
+            { name: "Email", value: order.email || "Unknown", inline: true },
+            { name: "Phone", value: order.phone || "Unknown", inline: true },
+            { name: "Customer Name", value: order.full_name || "Unknown", inline: true },
+            { name: "Country", value: order.country || "Unknown", inline: true },
             {
               name: "Receipt Channel",
               value: order.receipt_channel_id ? `<#${order.receipt_channel_id}>` : "None",
+            },
+            {
+              name: "Marketing Consent",
+              value: formatConsentValue(order.marketing_consent_status),
+              inline: true,
+            },
+            {
+              name: "Consent Timestamp",
+              value: formatDiscordTimestamp(order.marketing_consent_timestamp, "None"),
+              inline: true,
+            },
+            {
+              name: "Consent Source",
+              value: order.marketing_consent_source || "None",
+              inline: true,
+            },
+            {
+              name: "Shipping Info",
+              value:
+                `${order.full_name || "Unknown"}\n` +
+                `${order.email || "Unknown"}\n` +
+                `${order.phone || "Unknown"}\n` +
+                `${order.full_address || "Unknown"}\n` +
+                `${order.country || "Unknown"}`,
             },
             { name: "Items", value: itemLines.join("\n") || "_No items_" }
           )
@@ -4480,6 +5553,28 @@ client.on("interactionCreate", async (interaction) => {
 
         return interaction.reply({
           embeds: [embed],
+          flags: 64,
+        });
+      }
+
+      if (customId === "staff_customer_lookup_modal") {
+        const lookupValue = interaction.fields.getTextInputValue("lookup_customer_value")?.trim();
+
+        if (!lookupValue) {
+          return interaction.reply({ content: "Enter a lookup value.", flags: 64 });
+        }
+
+        const lead = await findCustomerLeadByLookupValue(lookupValue);
+
+        if (!lead) {
+          return interaction.reply({
+            content: "Customer / lead not found.",
+            flags: 64,
+          });
+        }
+
+        return interaction.reply({
+          embeds: [buildCustomerLeadLookupEmbed(lead)],
           flags: 64,
         });
       }
@@ -4543,19 +5638,21 @@ client.on("interactionCreate", async (interaction) => {
           return interaction.reply({ content: "Enter a search term.", flags: 64 });
         }
 
+        await interaction.deferReply({ flags: 64 });
+
         const options = {};
         if (action === "add_verified") options.excludeVerified = true;
 
         const matches = await searchGuildMembers(interaction.guild, search, options);
 
         if (!matches.length) {
-          return interaction.reply({
+          return interaction.editReply({
             content: "No matching members found.",
-            flags: 64,
+            components: [],
           });
         }
 
-        return interaction.reply({
+        return interaction.editReply({
           content: "Choose a member:",
           components: [
             new ActionRowBuilder().addComponents(
@@ -4565,7 +5662,6 @@ client.on("interactionCreate", async (interaction) => {
                 .addOptions(memberSelectOptions(matches))
             ),
           ],
-          flags: 64,
         });
       }
 
@@ -4709,8 +5805,7 @@ client.on("interactionCreate", async (interaction) => {
         return;
       }
     }
-
-    } catch (err) {
+  } catch (err) {
     console.error(err);
 
     if (!interaction.isRepliable()) return;
