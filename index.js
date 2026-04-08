@@ -2333,26 +2333,7 @@ async function clearCartDiscount(userId) {
 }
 
 async function hasUserPendingOrder(userId) {
-  const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
-  if (guild) {
-    const member = await guild.members.fetch(userId).catch(() => null);
-    if (member?.roles?.cache?.has(STAFF_ROLE_ID)) {
-      return false;
-    }
-  }
-
-  const res = await pool.query(
-    `
-    SELECT 1
-    FROM orders
-    WHERE user_id = $1
-      AND status IN ('pending', 'paid')
-    LIMIT 1
-    `,
-    [userId]
-  );
-
-  return res.rows.length > 0;
+  return false;
 }
 
 async function buildCartMessage(userId, heading = "✅ **Added to basket.**") {
